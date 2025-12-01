@@ -1,4 +1,3 @@
-// app/dashboard/page.tsx
 'use client';
 
 import Link from 'next/link';
@@ -69,21 +68,24 @@ export default function DashboardPage() {
   return (
     <main className="min-h-screen w-full bg-gray-100 flex flex-col items-center p-6 text-gray-900 relative">
       
-      {/* Header (Nom + Logout) */}
-      <div className="w-full max-w-2xl flex justify-between items-center mb-8 md:mb-12">
+      {/* Header (Nom + Logout) 
+          CORRECTION ICI : ajout de 'relative z-10' pour que le header reste 
+          cliquable au-dessus du contenu qui a une marge négative. 
+      */}
+      <div className="w-full max-w-2xl flex justify-between items-center mb-8 md:mb-12 relative z-10">
          <div className="text-sm font-medium text-gray-500">
             {profile?.full_name ? `Hallo, ${profile.full_name}` : 'Willkommen'}
          </div>
          <button
           onClick={handleLogout}
           disabled={isLoggingOut}
-          className="text-sm text-gray-500 hover:text-red-600 font-medium transition-colors px-3 py-2 rounded-lg hover:bg-gray-200"
+          className="text-sm text-gray-500 hover:text-red-600 font-medium transition-colors px-3 py-2 rounded-lg hover:bg-gray-200 cursor-pointer"
         >
           {isLoggingOut ? '...' : 'Abmelden'}
         </button>
       </div>
 
-      <div className="w-full max-w-2xl space-y-8 flex-grow flex flex-col justify-center -mt-20">
+      <div className="w-full max-w-2xl space-y-8 flex-grow flex flex-col justify-center -mt-20 relative z-0">
         
         {/* Titres */}
         <div className="text-center space-y-2">
@@ -142,8 +144,6 @@ export default function DashboardPage() {
               href="/backoffice/tickets"
               className="group block bg-white rounded-xl shadow-sm border border-gray-200 p-8 hover:shadow-md hover:border-gray-300 transition-all duration-200 md:col-span-2"
             >
-              {/* Note: j'ai mis 'md:col-span-2' pour qu'elle prenne toute la largeur en bas si tu veux, 
-                  sinon enlève 'md:col-span-2' pour qu'elle soit de taille normale */}
               <div className="w-12 h-12 bg-gray-100 text-gray-700 rounded-lg flex items-center justify-center mb-5 text-2xl group-hover:bg-gray-200 transition">
                 ⚙️
               </div>

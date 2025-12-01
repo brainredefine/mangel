@@ -169,7 +169,7 @@ export default function ExistingTicketsPage() {
     <main className="min-h-screen w-full bg-gray-100 flex items-start justify-center p-6 text-gray-900">
       <div className="w-full max-w-5xl space-y-6">
         
-        {/* En-tête avec bouton de création */}
+        {/* En-tête avec boutons */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-semibold text-gray-900">Meine Tickets</h1>
@@ -177,12 +177,24 @@ export default function ExistingTicketsPage() {
               Hier finden Sie eine Übersicht Ihrer gemeldeten Mängel.
             </p>
           </div>
-          <Link 
-            href="/tickets/new"
-            className="inline-flex items-center justify-center px-5 py-2.5 bg-gray-900 text-white text-sm font-medium rounded-lg shadow-sm hover:bg-gray-800 transition active:scale-95"
-          >
-            + Neues Ticket
-          </Link>
+          
+          <div className="flex items-center gap-3">
+            {/* Bouton retour dashboard */}
+            <button
+              onClick={() => router.push('/dashboard')}
+              className="inline-flex items-center justify-center px-4 py-2.5 bg-white text-gray-700 border border-gray-300 text-sm font-medium rounded-lg shadow-sm hover:bg-gray-50 transition"
+            >
+              ← Dashboard
+            </button>
+            
+            {/* Bouton nouveau ticket */}
+            <Link 
+              href="/tickets/new"
+              className="inline-flex items-center justify-center px-5 py-2.5 bg-gray-900 text-white text-sm font-medium rounded-lg shadow-sm hover:bg-gray-800 transition active:scale-95"
+            >
+              + Neues Ticket
+            </Link>
+          </div>
         </div>
 
         {/* Liste des tickets */}
