@@ -34,6 +34,60 @@ function createOdooClient() {
   };
 }
 
+function authenticate(common: any): Promise<number> {
+  return new Promise((resolve, reject) => {
+    common.methodCall(
+      'authenticate',
+      [ODOO_CONFIG.db, ODOO_CONFIG.username, ODOO_CONFIG.password, {}],
+      (authErr: any, uid: any) => {
+        if (authErr) return reject(authErr);
+        resolve(uid as number);
+      }
+    );
+  });
+}
+
+/**
+ * ✅ NEW: check si un res.partner existe vraiment dans Odoo (par ID).
+ * Utilise search_count sur res.partner.
+ */
+export async function partnerExistsInOdoo(partnerId: number): Promise<boolean> {
+  if (!partnerId || partnerId <= 0) return false;
+
+  const { client, common } = createOdooClient();
+
+  try {
+    const uid = await authenticate(common);
+
+    const domain = [['id', '=', partnerId]];
+
+    const count = await new Promise<number>((resolve, reject) => {
+      client.methodCall(
+        'execute_kw',
+        [
+          ODOO_CONFIG.db,
+          uid,
+          ODOO_CONFIG.password,
+          PARTNER_MODEL,
+          'search_count',
+          [domain],
+        ],
+        (err: any, result: any) => {
+          if (err) return reject(err);
+          resolve(Number(result) || 0);
+        }
+      );
+    });
+
+    return count > 0;
+  } catch (err) {
+    console.error('[partnerExistsInOdoo] error while checking partner id', partnerId, err);
+    // Important: si le check échoue, on ne bloque pas le flux "import".
+    // On retourne false pour permettre de continuer.
+    return false;
+  }
+}
+
 /**
  * 1️⃣ Utilisé par app/tickets/new/actions.ts
  * Récupère les tenancies pour un partner (menu déroulant)
@@ -171,7 +225,7 @@ export async function fetchBuildingInfoByTenancy(tenancyId: number) {
             ODOO_CONFIG.db,
             uid,
             ODOO_CONFIG.password,
-            TENANCY_MODEL, // ex: 'property.tenancy'
+            TENANCY_MODEL,
             'search_read',
             [tenancyDomain],
             {
@@ -197,7 +251,6 @@ export async function fetchBuildingInfoByTenancy(tenancyId: number) {
 
             const tenancy = tenancies[0];
 
-            // main_property_id est un many2one -> [id, label] OU directement un id
             const mainProp = tenancy.main_property_id;
             const propId = Array.isArray(mainProp) ? mainProp[0] : mainProp;
 
@@ -231,7 +284,7 @@ export async function fetchBuildingInfoByTenancy(tenancyId: number) {
                 ODOO_CONFIG.db,
                 uid,
                 ODOO_CONFIG.password,
-                PROPERTY_MODEL, // ex: 'property.property'
+                PROPERTY_MODEL,
                 'read',
                 [[propId]],
                 {
@@ -239,7 +292,7 @@ export async function fetchBuildingInfoByTenancy(tenancyId: number) {
                     'id',
                     'name',
                     'reference_id',
-                    'internal_label',       // <— important pour tes vendors
+                    'internal_label',
                     'street',
                     'zip',
                     'city',
@@ -279,9 +332,7 @@ export async function fetchBuildingInfoByTenancy(tenancyId: number) {
 
                 const ref = prop.reference_id || prop.name || String(prop.id);
 
-                const addressParts = [prop.street, prop.zip, prop.city].filter(
-                  Boolean
-                );
+                const addressParts = [prop.street, prop.zip, prop.city].filter(Boolean);
                 const address = addressParts.join(' ');
 
                 const objektLabel = [ref, address].filter(Boolean).join(' – ');
@@ -356,9 +407,9 @@ export async function fetchVendorsByReference(internalLabel: string) {
                 'name',
                 'email',
                 'phone',
-                'street',   // 🆕
-                'zip',      // 🆕
-                'city',     // (on l’avait déjà, on garde)
+                'street',
+                'zip',
+                'city',
                 'category_id',
               ],
               limit: 20,
@@ -373,6 +424,7 @@ export async function fetchVendorsByReference(internalLabel: string) {
     );
   });
 }
+
 type CreateServiceProviderParams = {
   name: string;
   street?: string | null;
@@ -401,7 +453,6 @@ export async function createServiceProviderInOdoo(params: CreateServiceProviderP
           return reject(authErr);
         }
 
-        // Helper pour continuer une fois qu'on a internalLabel (ou pas)
         const proceedWithInternalLabel = (internalLabel: string | null) => {
           const categoryNames: string[] = ['Maintenance'];
           if (internalLabel) categoryNames.push(internalLabel);
@@ -409,11 +460,9 @@ export async function createServiceProviderInOdoo(params: CreateServiceProviderP
           const categoryIds: number[] = [];
 
           if (categoryNames.length === 0) {
-            // Pas de tags -> on crée directement le partner
             return createPartner(categoryIds);
           }
 
-          // 1) Chercher les catégories existantes (⚠️ ici on passe bien un kwargs object)
           client.methodCall(
             'execute_kw',
             [
@@ -430,18 +479,13 @@ export async function createServiceProviderInOdoo(params: CreateServiceProviderP
             ],
             (catErr: any, existing: any[]) => {
               if (catErr) {
-                console.error(
-                  '[createServiceProviderInOdoo] category search_read error:',
-                  catErr
-                );
+                console.error('[createServiceProviderInOdoo] category search_read error:', catErr);
                 return reject(catErr);
               }
 
               const existingByName = new Map<string, number>();
               (existing || []).forEach((c: any) => {
-                if (c && c.name && c.id) {
-                  existingByName.set(c.name, c.id);
-                }
+                if (c && c.name && c.id) existingByName.set(c.name, c.id);
               });
 
               const missingNames: string[] = [];
@@ -454,10 +498,8 @@ export async function createServiceProviderInOdoo(params: CreateServiceProviderP
                 }
               }
 
-              // 2) Créer les catégories manquantes en série
               const createNextCategory = (index: number) => {
                 if (index >= missingNames.length) {
-                  // Tout créé -> on peut créer le partenaire
                   return createPartner(categoryIds);
                 }
 
@@ -474,10 +516,7 @@ export async function createServiceProviderInOdoo(params: CreateServiceProviderP
                   ],
                   (createErr: any, newId: any) => {
                     if (createErr) {
-                      console.error(
-                        '[createServiceProviderInOdoo] category create error:',
-                        createErr
-                      );
+                      console.error('[createServiceProviderInOdoo] category create error:', createErr);
                       return reject(createErr);
                     }
                     categoryIds.push(newId);
@@ -491,11 +530,8 @@ export async function createServiceProviderInOdoo(params: CreateServiceProviderP
           );
         };
 
-        // Helper pour créer le partenaire une fois qu'on a les categoryIds
         const createPartner = (categoryIds: number[]) => {
-          const partnerData: any = {
-            name,
-          };
+          const partnerData: any = { name };
           if (street) partnerData.street = street;
           if (zip) partnerData.zip = zip;
           if (city) partnerData.city = city;
@@ -517,22 +553,15 @@ export async function createServiceProviderInOdoo(params: CreateServiceProviderP
             ],
             (partnerErr: any, partnerId: any) => {
               if (partnerErr) {
-                console.error(
-                  '[createServiceProviderInOdoo] partner create error:',
-                  partnerErr
-                );
+                console.error('[createServiceProviderInOdoo] partner create error:', partnerErr);
                 return reject(partnerErr);
               }
-              console.log(
-                '[createServiceProviderInOdoo] created partner id =',
-                partnerId
-              );
+              console.log('[createServiceProviderInOdoo] created partner id =', partnerId);
               resolve(partnerId as number);
             }
           );
         };
 
-        // Si on a un assetId -> on va chercher internal_label sur property.property
         if (assetId) {
           client.methodCall(
             'execute_kw',
@@ -550,24 +579,16 @@ export async function createServiceProviderInOdoo(params: CreateServiceProviderP
             ],
             (propErr: any, props: any[]) => {
               if (propErr) {
-                console.error(
-                  '[createServiceProviderInOdoo] property search_read error:',
-                  propErr
-                );
-                // On continue sans internal_label
+                console.error('[createServiceProviderInOdoo] property search_read error:', propErr);
                 return proceedWithInternalLabel(null);
               }
 
               const prop = props && props[0];
-              const internalLabel =
-                prop && prop.internal_label
-                  ? String(prop.internal_label)
-                  : null;
+              const internalLabel = prop && prop.internal_label ? String(prop.internal_label) : null;
               proceedWithInternalLabel(internalLabel);
             }
           );
         } else {
-          // Pas d'asset -> pas d'internal_label
           proceedWithInternalLabel(null);
         }
       }

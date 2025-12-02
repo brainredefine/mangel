@@ -21,6 +21,7 @@ import {
   searchExternalVendorsAction,
   saveChosenExternalVendorAction,
   importChosenVendorToOdooAction,
+  resetOdooVendorIdAction,
 } from './actions';
 
 // --- TYPES LOCAUX ---
@@ -170,6 +171,7 @@ export default function TicketDetailPage() {
   // 🆕 Upload de pièces jointes côté admin
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const [attachmentUploadError, setAttachmentUploadError] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false); // pour drag & drop
 
   const isAdminAm = profile?.role === 'admin_am';
 
@@ -519,67 +521,96 @@ const handlePrepareVendorEmail = (
     setSendingMessage(false);
   };
 
-  // 🆕 Upload d’une pièce jointe côté admin
-  const handleAdminUploadAttachment = async (
-    e: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const file = e.target.files?.[0];
-    if (!file || !ticket || !currentUserId) return;
+  // 🆕 1. Fonction logique d'upload pure (réutilisable)
+    const uploadFileToSupabase = async (file: File) => {
+      if (!ticket || !currentUserId) return;
 
-    setUploadingAttachment(true);
-    setAttachmentUploadError(null);
+      setUploadingAttachment(true);
+      setAttachmentUploadError(null);
 
-    try {
-      const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-      const path = `${ticket.tenant_id}/${ticket.id}/${Date.now()}-${safeName}`;
+      try {
+        const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+        const path = `${ticket.tenant_id}/${ticket.id}/${Date.now()}-${safeName}`;
 
-      // 1. Upload dans le bucket
-      const { error: uploadError } = await supabase.storage
-        .from('ticket_attachments')
-        .upload(path, file, {
-          contentType: file.type || undefined,
-          upsert: false,
-        });
+        // A. Upload Storage
+        const { error: uploadError } = await supabase.storage
+          .from('ticket_attachments')
+          .upload(path, file, {
+            contentType: file.type || undefined,
+            upsert: false,
+          });
 
-      if (uploadError) throw uploadError;
+        if (uploadError) throw uploadError;
 
-      // 2. Insert en base
-      const { data: insertData, error: dbError } = await supabase
-        .from('ticket_attachments')
-        .insert({
-          ticket_id: ticket.id,
-          uploaded_by: currentUserId,
-          file_path: path,
-          original_name: file.name,
-          mime_type: file.type || 'application/octet-stream',
-          privacy: 'private', // 👈 important
-        })
-        .select()
-        .single();
+        // B. Insert DB
+        const { data: insertData, error: dbError } = await supabase
+          .from('ticket_attachments')
+          .insert({
+            ticket_id: ticket.id,
+            uploaded_by: currentUserId,
+            file_path: path,
+            original_name: file.name,
+            mime_type: file.type || 'application/octet-stream',
+            privacy: 'private',
+          })
+          .select()
+          .single();
 
-      if (dbError) throw dbError;
+        if (dbError) throw dbError;
 
-      // 3. URL publique (comme pour les autres)
-      const { data: publicData } = supabase.storage
-        .from('ticket_attachments')
-        .getPublicUrl(path);
+        // C. Get Public URL
+        const { data: publicData } = supabase.storage
+          .from('ticket_attachments')
+          .getPublicUrl(path);
 
-      const newAtt: AttachmentWithUrl = {
-        ...(insertData as Attachment),
-        url: publicData?.publicUrl ?? null,
-      };
+        const newAtt: AttachmentWithUrl = {
+          ...(insertData as Attachment),
+          url: publicData?.publicUrl ?? null,
+        };
 
-      setAttachments((prev) => [...prev, newAtt]);
+        setAttachments((prev) => [...prev, newAtt]);
+      } catch (err) {
+        console.error('Admin upload attachment error', err);
+        setAttachmentUploadError('Upload fehlgeschlagen.');
+      } finally {
+        setUploadingAttachment(false);
+        setIsDragging(false); // On reset le drag state au cas où
+      }
+    };
 
-      // Reset input pour pouvoir ré-uploader le même fichier si besoin
+    // 🆕 2. Handler pour l'input classique (click)
+    const handleAdminFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) {
+        uploadFileToSupabase(file);
+      }
+      // Reset value to allow re-uploading same file
       e.target.value = '';
-    } catch (err) {
-      console.error('Admin upload attachment error', err);
-      setAttachmentUploadError('Upload fehlgeschlagen.');
-    } finally {
-      setUploadingAttachment(false);
-    }
-  };
+    };
+
+    // 🆕 3. Handlers pour le Drag & Drop
+    const handleDragOver = (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragging(true);
+    };
+
+    const handleDragLeave = (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragging(false);
+    };
+
+    const handleDrop = (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragging(false);
+      
+      if (uploadingAttachment) return; // Prevent double upload
+
+      const files = e.dataTransfer.files;
+      if (files && files.length > 0) {
+        // On prend juste le premier fichier pour l'instant
+        uploadFileToSupabase(files[0]);
+      }
+    };
 
   // VENDOR HANDLER ODOO
   const handleLoadVendors = async () => {
@@ -623,6 +654,7 @@ const handleChooseOdooVendor = async (vendor: Vendor) => {
       tgm_zip: zip,
       tgm_mail: email,
       tgm_phone: phone,
+      odoo_vendor_id: vendor.id,
       // si un jour tu ajoutes une colonne tgm_source: 'odoo' | 'external'
       // tgm_source: 'odoo',
     })
@@ -692,41 +724,33 @@ const handleChooseExternalVendor = async (vendor: ExternalVendor) => {
 
   // Import du prestataire choisi dans Odoo (données supabase déjà remplies)
   const handleImportChosenVendorToOdoo = async () => {
-  if (!ticket || !isAdminAm) return;
-  if (!ticket.chosen_tgm) {
-    alert('Aucun prestataire choisi (chosen_tgm vide).');
-    return;
-  }
+    try {
+      // 1) Force reset à 0
+      const reset = await resetOdooVendorIdAction(ticketId);
+      if (!reset.success) {
+        alert("Reset odoo_vendor_id a échoué.");
+        return;
+      }
 
-  if (!window.confirm('Diesen Dienstleister in Odoo anlegen?')) return;
+      // 2) Puis import
+      const res = await importChosenVendorToOdooAction(ticketId);
 
-  try {
-    const res = await importChosenVendorToOdooAction(ticket.id);
+      if (!res.success) {
+        alert(`Import error: ${res.error}`);
+        return;
+      }
 
-    if (!res.success) {
-      console.error('importChosenVendorToOdooAction error', res.error);
-      alert("Der Dienstleister konnte in Odoo nicht in Odoo angelegt werden.");
-      return;
+      if (res.alreadyImported) {
+        alert('Dieser Dienstleister existiert bereits in Odoo.');
+        return;
+      }
+
+      alert('Import OK!');
+    } catch (e) {
+      console.error(e);
+      alert('Unexpected error');
     }
-
-    // Si ton action renvoie partnerId quand tout se passe bien
-    if ('partnerId' in res && res.partnerId) {
-      setTicket((prev) =>
-        prev ? { ...prev, odoo_vendor_id: res.partnerId } : prev
-      );
-    }
-
-    if ('alreadyImported' in res && res.alreadyImported) {
-      alert('Dieser Dienstleister existiert bereits in Odoo.');
-    } else {
-      alert('Dienstleister wurde erfolgreich in Odoo angelegt.');
-    }
-  } catch (err) {
-    console.error('handleImportChosenVendorToOdoo error', err);
-    alert('Erreur lors de la création du prestataire dans Odoo.');
-  }
-};
-
+  };
 
   // Admin actions
   const handleOpenTicket = async () => {
@@ -1528,7 +1552,7 @@ const handleChooseExternalVendor = async (vendor: ExternalVendor) => {
             ? 'Suche läuft...'
             : 'Externen Dienstleister finden'}
         </button>
-        {ticket.chosen_tgm && (
+        {ticket.chosen_tgm && !(ticket.odoo_vendor_id && ticket.odoo_vendor_id > 0) && (
           <button
             onClick={handleImportChosenVendorToOdoo}
             className="text-xs px-3 py-1 rounded border border-indigo-500 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
@@ -2065,29 +2089,54 @@ const handleChooseExternalVendor = async (vendor: ExternalVendor) => {
             </h2>
 
             {/* 🆕 Zone d’upload admin */}
+{/* 🆕 Zone d’upload admin avec Drag & Drop */}
             {isAdminAm && (
               <div className="mb-4">
-                <div className="border border-dashed border-gray-300 rounded-lg p-3 flex items-center justify-between gap-3 bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    <div className="font-medium">
-                      Interne Datei hinzufügen (privat)
+                <div
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  className={`border border-dashed rounded-lg p-4 flex flex-col items-center justify-center gap-2 transition-all duration-200 ${
+                    isDragging
+                      ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200 ring-offset-1'
+                      : 'border-gray-300 bg-gray-50 hover:bg-gray-100'
+                  }`}
+                >
+                  <div className="text-center">
+                    <div className="text-sm font-medium text-gray-700">
+                      {isDragging ? (
+                        <span className="text-blue-700">Datei hier ablegen!</span>
+                      ) : (
+                        <span>Interne Datei hinzufügen (privat)</span>
+                      )}
                     </div>
-                    <div className="text-[11px] text-gray-500">
-                      Wird als <code>privacy = &quot;private&quot;</code> gespeichert.
-                    </div>
+                    {!isDragging && (
+                      <div className="text-[11px] text-gray-500 mt-1">
+                        Drag & Drop oder Button nutzen. Gespeichert als <code>private</code>.
+                      </div>
+                    )}
                   </div>
-                  <label className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-900 text-white hover:bg-gray-800 cursor-pointer">
-                    {uploadingAttachment ? 'Upload...' : 'Datei wählen'}
+
+                  <label className="inline-flex items-center px-4 py-2 text-xs font-medium rounded-lg bg-gray-900 text-white hover:bg-gray-800 cursor-pointer shadow-sm transition mt-1">
+                    {uploadingAttachment ? (
+                      <span className="flex items-center gap-2">
+                        <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                        Upload läuft...
+                      </span>
+                    ) : (
+                      'Datei auswählen'
+                    )}
                     <input
                       type="file"
                       className="hidden"
-                      onChange={handleAdminUploadAttachment}
+                      onChange={handleAdminFileInputChange}
                       disabled={uploadingAttachment}
                     />
                   </label>
                 </div>
+                
                 {attachmentUploadError && (
-                  <p className="mt-1 text-xs text-red-600">
+                  <p className="mt-2 text-xs text-red-600 text-center">
                     {attachmentUploadError}
                   </p>
                 )}
