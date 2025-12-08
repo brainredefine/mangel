@@ -2,7 +2,7 @@
 
 export type Profile = {
   id: string;
-  tenant_id: string;
+  tenant_id: number;
   role: string;
 };
 
@@ -16,7 +16,7 @@ export type ChecklistState = Partial<
 
 export type Ticket = {
   id: string;
-  tenant_id: string;
+  tenant_id: number;
   created_by: string;
   title: string;
   description: string | null;

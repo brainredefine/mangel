@@ -5,7 +5,8 @@ import {
   fetchBuildingInfoByTenancy,
   fetchVendorsByReference,
   createServiceProviderInOdoo,
-  partnerExistsInOdoo, // ✅ NEW
+  partnerExistsInOdoo,
+  fetchOfferMailContext, // ✅ NEW
 } from '../../../lib/odooClient';
 import { supabaseAdmin } from '../../../lib/supabaseAdmin';
 
@@ -23,6 +24,17 @@ type ExternalVendor = {
   snippet?: string | null;
   source?: string | null;
 };
+
+export async function getOfferMailContextAction(tenancyId: number, tenantPartnerId: number) {
+  try {
+    const data = await fetchOfferMailContext({ tenancyId, tenantPartnerId });
+    return { success: true, data };
+  } catch (e: any) {
+    console.error('[getOfferMailContextAction] error', e);
+    return { success: false, error: e?.message ?? 'Unknown error' };
+  }
+}
+
 
 export async function getBuildingInfoAction(tenancyId: number | string) {
   try {

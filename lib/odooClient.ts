@@ -81,7 +81,11 @@ export async function partnerExistsInOdoo(partnerId: number): Promise<boolean> {
 
     return count > 0;
   } catch (err) {
-    console.error('[partnerExistsInOdoo] error while checking partner id', partnerId, err);
+    console.error(
+      '[partnerExistsInOdoo] error while checking partner id',
+      partnerId,
+      err
+    );
     // Important: si le check échoue, on ne bloque pas le flux "import".
     // On retourne false pour permettre de continuer.
     return false;
@@ -200,6 +204,8 @@ export async function fetchTenanciesFromOdoo(partnerId: number) {
  * 2️⃣ Utilisé par app/tickets/[id]/actions.ts
  * Bridge : partir de odoo_tenancy_id (Supabase) -> property.tenancy -> property.property
  * et renvoyer Tenancy + Objekt + Adresse + dates + REFERENCE + INTERNAL_LABEL (pour le matching tags).
+ *
+ * ✅ MODIF: ajoute entity_id (proprio) depuis property.property.entity_id
  */
 export async function fetchBuildingInfoByTenancy(tenancyId: number) {
   return new Promise<any>((resolve, reject) => {
@@ -235,7 +241,10 @@ export async function fetchBuildingInfoByTenancy(tenancyId: number) {
           ],
           (tenErr: any, tenancies: any[]) => {
             if (tenErr) {
-              console.error('[fetchBuildingInfoByTenancy] tenancy search_read error:', tenErr);
+              console.error(
+                '[fetchBuildingInfoByTenancy] tenancy search_read error:',
+                tenErr
+              );
               return reject(tenErr);
             }
 
@@ -274,6 +283,8 @@ export async function fetchBuildingInfoByTenancy(tenancyId: number) {
                 property_city: null,
                 construction_year: null,
                 last_modernization: null,
+                entity_id: null,
+                entity_name: null,
               });
             }
 
@@ -298,12 +309,17 @@ export async function fetchBuildingInfoByTenancy(tenancyId: number) {
                     'city',
                     'construction_year',
                     'last_modernization',
+                    'entity_id', // ✅ NEW
+                    'company_id', // ✅ NEW
                   ],
                 },
               ],
               (propErr: any, props: any[]) => {
                 if (propErr) {
-                  console.error('[fetchBuildingInfoByTenancy] property read error:', propErr);
+                  console.error(
+                    '[fetchBuildingInfoByTenancy] property read error:',
+                    propErr
+                  );
                   return reject(propErr);
                 }
 
@@ -325,6 +341,8 @@ export async function fetchBuildingInfoByTenancy(tenancyId: number) {
                     property_city: null,
                     construction_year: null,
                     last_modernization: null,
+                    entity_id: null,
+                    entity_name: null,
                   });
                 }
 
@@ -337,6 +355,12 @@ export async function fetchBuildingInfoByTenancy(tenancyId: number) {
 
                 const objektLabel = [ref, address].filter(Boolean).join(' – ');
 
+                const entity = prop.entity_id;
+                const entity_id = Array.isArray(entity) ? entity[0] : null;
+                const entity_name = Array.isArray(entity) ? entity[1] : null;
+                const company = prop.company_id; // [id, name] ou false
+                const company_name = Array.isArray(company) ? company[1] : null;
+
                 const payload = {
                   tenancy_id: tenancy.id,
                   tenancy_name: tenancy.name,
@@ -348,6 +372,9 @@ export async function fetchBuildingInfoByTenancy(tenancyId: number) {
                   property_city: prop.city || null,
                   construction_year: prop.construction_year ?? null,
                   last_modernization: prop.last_modernization ?? null,
+                  entity_id,
+                  entity_name,
+                  company_name, // ✅ NEW
                 };
 
                 console.log(
@@ -402,16 +429,7 @@ export async function fetchVendorsByReference(internalLabel: string) {
             'search_read',
             [domain],
             {
-              fields: [
-                'id',
-                'name',
-                'email',
-                'phone',
-                'street',
-                'zip',
-                'city',
-                'category_id',
-              ],
+              fields: ['id', 'name', 'email', 'phone', 'street', 'zip', 'city', 'category_id'],
               limit: 20,
             },
           ],
@@ -479,7 +497,10 @@ export async function createServiceProviderInOdoo(params: CreateServiceProviderP
             ],
             (catErr: any, existing: any[]) => {
               if (catErr) {
-                console.error('[createServiceProviderInOdoo] category search_read error:', catErr);
+                console.error(
+                  '[createServiceProviderInOdoo] category search_read error:',
+                  catErr
+                );
                 return reject(catErr);
               }
 
@@ -516,7 +537,10 @@ export async function createServiceProviderInOdoo(params: CreateServiceProviderP
                   ],
                   (createErr: any, newId: any) => {
                     if (createErr) {
-                      console.error('[createServiceProviderInOdoo] category create error:', createErr);
+                      console.error(
+                        '[createServiceProviderInOdoo] category create error:',
+                        createErr
+                      );
                       return reject(createErr);
                     }
                     categoryIds.push(newId);
@@ -543,14 +567,7 @@ export async function createServiceProviderInOdoo(params: CreateServiceProviderP
 
           client.methodCall(
             'execute_kw',
-            [
-              ODOO_CONFIG.db,
-              uid,
-              ODOO_CONFIG.password,
-              PARTNER_MODEL,
-              'create',
-              [partnerData],
-            ],
+            [ODOO_CONFIG.db, uid, ODOO_CONFIG.password, PARTNER_MODEL, 'create', [partnerData]],
             (partnerErr: any, partnerId: any) => {
               if (partnerErr) {
                 console.error('[createServiceProviderInOdoo] partner create error:', partnerErr);
@@ -584,7 +601,8 @@ export async function createServiceProviderInOdoo(params: CreateServiceProviderP
               }
 
               const prop = props && props[0];
-              const internalLabel = prop && prop.internal_label ? String(prop.internal_label) : null;
+              const internalLabel =
+                prop && prop.internal_label ? String(prop.internal_label) : null;
               proceedWithInternalLabel(internalLabel);
             }
           );
@@ -594,4 +612,146 @@ export async function createServiceProviderInOdoo(params: CreateServiceProviderP
       }
     );
   });
+}
+
+/* -------------------------------------------------------------------------- */
+/*                               ✅ NEW HELPERS                               */
+/* -------------------------------------------------------------------------- */
+
+export type PartnerDetails = {
+  id: number;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  vat: string | null;
+  contact_address_complete: string | null;
+};
+
+export async function fetchPartnerDetails(
+  partnerId: number
+): Promise<PartnerDetails | null> {
+  if (!partnerId || partnerId <= 0) return null;
+
+  return new Promise((resolve, reject) => {
+    const { client, common } = createOdooClient();
+
+    common.methodCall(
+      'authenticate',
+      [ODOO_CONFIG.db, ODOO_CONFIG.username, ODOO_CONFIG.password, {}],
+      (authErr: any, uid: any) => {
+        if (authErr) return reject(authErr);
+
+        client.methodCall(
+          'execute_kw',
+          [
+            ODOO_CONFIG.db,
+            uid,
+            ODOO_CONFIG.password,
+            PARTNER_MODEL,
+            'read',
+            [[partnerId]],
+            {
+              fields: ['id', 'name', 'email', 'phone', 'vat', 'contact_address_complete'],
+            },
+          ],
+          (err: any, partners: any[]) => {
+            if (err) return reject(err);
+            const p = partners && partners[0];
+            if (!p) return resolve(null);
+
+            resolve({
+              id: Number(p.id),
+              name: p.name ?? null,
+              email: p.email ?? null,
+              phone: p.phone ?? null,
+              vat: p.vat ?? null,
+              contact_address_complete: p.contact_address_complete ?? null,
+            });
+          }
+        );
+      }
+    );
+  });
+}
+
+export type OfferMailContext = {
+  ownerEntity: {
+    id: number | null;
+    name: string | null;
+    vat: string | null;
+    address: string | null;
+  } | null;
+
+  tenant: {
+    id: number;
+    name: string | null;
+    email: string | null;
+    phone: string | null;
+    address: string | null;
+  } | null;
+
+  building: {
+    tenancy_id: number;
+    objekt_label: string | null;
+    property_reference: string | null;
+    property_internal_label: string | null;
+    property_street: string | null;
+    property_zip: string | null;
+    property_city: string | null;
+    entity_id: number | null;
+    entity_name: string | null;
+    company_name: string | null;      // 👈 NEW
+  } | null;
+};
+
+
+export async function fetchOfferMailContext(params: {
+  tenancyId: number;
+  tenantPartnerId: number; // ticket.tenant_id
+}): Promise<OfferMailContext> {
+  const { tenancyId, tenantPartnerId } = params;
+
+  const building = await fetchBuildingInfoByTenancy(tenancyId);
+  const entityId = building?.entity_id ? Number(building.entity_id) : null;
+
+  const [entityPartner, tenantPartner] = await Promise.all([
+    entityId ? fetchPartnerDetails(entityId) : Promise.resolve(null),
+    tenantPartnerId ? fetchPartnerDetails(tenantPartnerId) : Promise.resolve(null),
+  ]);
+
+  return {
+    building: building
+      ? {
+          tenancy_id: Number(building.tenancy_id),
+          objekt_label: building.objekt_label ?? null,
+          property_reference: building.property_reference ?? null,
+          property_internal_label: building.property_internal_label ?? null,
+          property_street: building.property_street ?? null,
+          property_zip: building.property_zip ?? null,
+          property_city: building.property_city ?? null,
+          entity_id: building.entity_id ?? null,
+          entity_name: building.entity_name ?? null,
+          company_name: building.company_name ?? null, 
+        }
+      : null,
+
+    ownerEntity: entityPartner
+      ? {
+          id: entityPartner.id,
+          name: entityPartner.name,
+          vat: entityPartner.vat,
+          address: entityPartner.contact_address_complete,
+        }
+      : null,
+
+    tenant: tenantPartner
+      ? {
+          id: tenantPartner.id,
+          name: tenantPartner.name,
+          email: tenantPartner.email,
+          phone: tenantPartner.phone,
+          address: tenantPartner.contact_address_complete,
+        }
+      : null,
+  };
 }
