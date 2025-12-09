@@ -54,15 +54,12 @@ export function buildInquiryMail(params: {
 
 wir bitten um ein Angebot bzw. die Durchführung der folgenden Maßnahme in einem Wohnobjekt.
 
-Objekt: ${objekt}
 Adresse: ${address || '-'}
 
 Kurzbeschreibung des Problems:
-
 ${ticket.description || ''}
 
 Auszuführende Leistungspositionen:
-
 ${lpLines}
 
 Fotodokumentation (Links gültig für 7 Tage):

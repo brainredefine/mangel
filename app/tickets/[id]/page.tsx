@@ -21,13 +21,13 @@ import {
   saveChosenExternalVendorAction,
   importChosenVendorToOdooAction,
   resetOdooVendorIdAction,
+  getOfferMailContextAction,
 } from './actions';
 
-// ✅ new mail helpers
 import { buildSignedPhotoLinksText, buildMailtoHref } from './mail/mail';
 import { buildInquiryMail } from './mail/mailInquiry';
 import { buildOfferMail } from './mail/mailOffer';
-import { getOfferMailContextAction } from './actions'; // ✅ ajoute l’export
+
 // --- TYPES LOCAUX ---
 
 type CostRow = {
@@ -52,6 +52,10 @@ type TicketWithMeta = Ticket & {
   angebotsumme?: number | null; // Angebotsumme (vendor quote)
   beauftragungsumme?: number | null; // Beauftragungsumme (our commitment)
   rechnungsumme?: number | null; // Rechnungsumme (final invoice)
+  
+  // ✅ Nouveaux champs pour la logique Luxembourg
+  over_5k?: boolean;
+  lux_approved?: boolean;
 };
 
 type BuildingInfo = {
@@ -183,10 +187,10 @@ export default function TicketDetailPage() {
   const [savingBeauftragt, setSavingBeauftragt] = useState(false);
   const [savingRechnung, setSavingRechnung] = useState(false);
 
-  // 🆕 Upload de pièces jointes côté admin
+  // Upload attachment admin
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const [attachmentUploadError, setAttachmentUploadError] = useState<string | null>(null);
-  const [isDragging, setIsDragging] = useState(false); // pour drag & drop
+  const [isDragging, setIsDragging] = useState(false);
 
   const isAdminAm = profile?.role === 'admin_am';
 
@@ -227,8 +231,6 @@ export default function TicketDetailPage() {
       }
 
       setProfile(profileData as Profile);
-
-      // ✅ security role local
       const isCurrentUserAdmin = profileData.role === 'admin_am';
 
       // 3. Ticket
@@ -245,31 +247,52 @@ export default function TicketDetailPage() {
         return;
       }
 
-      if (!isCurrentUserAdmin && ticketData.tenant_id !== profileData.tenant_id) {
-        setErrorMsg('Sie haben keinen Zugriff auf dieses Ticket.');
-        setLoading(false);
-        return;
+      const t = ticketData as TicketWithMeta;
+
+      // --- 4. VÉRIFICATION SÉCURITÉ (CORRIGÉE) ---
+      if (!isCurrentUserAdmin) {
+        // On convertit tout en String pour éviter le problème int8 vs text
+        const ticketTenantId = t.tenant_id ? String(t.tenant_id) : null;
+        const userTenantId = profileData.tenant_id ? String(profileData.tenant_id) : null;
+
+        const isSameTenant = ticketTenantId && userTenantId && (ticketTenantId === userTenantId);
+        const isCreator = t.created_by === user.id;
+
+        // DEBUG : Tu pourras supprimer ces logs une fois que ça marche
+        console.log('🔐 SECURITY CHECK:', {
+          ticketId: t.id,
+          role: profileData.role,
+          ticketTenant: ticketTenantId,
+          userTenant: userTenantId,
+          match: isSameTenant
+        });
+
+        if (!isSameTenant && !isCreator) {
+          setErrorMsg('Sie haben keinen Zugriff auf dieses Ticket.');
+          setLoading(false);
+          return;
+        }
       }
 
-      const t = ticketData as TicketWithMeta;
       setTicket(t);
 
-      // Init drafts
-      setAdminNotesDraft(t.admin_notes ?? '');
-      setCostDraft(t.cost_estimated !== null && t.cost_estimated !== undefined ? String(t.cost_estimated) : '');
-      setAngebotDraft(t.angebotsumme !== null && t.angebotsumme !== undefined ? String(t.angebotsumme) : '');
-      setBeauftragtDraft(
-        t.beauftragungsumme !== null && t.beauftragungsumme !== undefined ? String(t.beauftragungsumme) : ''
-      );
-      setRechnungDraft(t.rechnungsumme !== null && t.rechnungsumme !== undefined ? String(t.rechnungsumme) : '');
+      // Init drafts (Uniquement pour admin)
+      if (isCurrentUserAdmin) {
+        setAdminNotesDraft(t.admin_notes ?? '');
+        setCostDraft(t.cost_estimated !== null && t.cost_estimated !== undefined ? String(t.cost_estimated) : '');
+        setAngebotDraft(t.angebotsumme !== null && t.angebotsumme !== undefined ? String(t.angebotsumme) : '');
+        setBeauftragtDraft(
+          t.beauftragungsumme !== null && t.beauftragungsumme !== undefined ? String(t.beauftragungsumme) : ''
+        );
+        setRechnungDraft(t.rechnungsumme !== null && t.rechnungsumme !== undefined ? String(t.rechnungsumme) : '');
+        setExpectedEndDraft(t.expected_enddate ? t.expected_enddate.slice(0, 10) : '');
+        setCostAnalysisDraft(t.cost_analysis_text ?? '');
+        
+        if (Array.isArray(t.cost_table)) setCostTableRows(t.cost_table);
+        else setCostTableRows([]);
+      }
 
-      setExpectedEndDraft(t.expected_enddate ? t.expected_enddate.slice(0, 10) : '');
-      setCostAnalysisDraft(t.cost_analysis_text ?? '');
-
-      if (Array.isArray(t.cost_table)) setCostTableRows(t.cost_table);
-      else setCostTableRows([]);
-
-      // 4. Attachments (AVEC FILTRAGE DE SÉCURITÉ)
+      // 5. Attachments
       const { data: attachmentsData, error: attachmentsError } = await supabase
         .from('ticket_attachments')
         .select('*')
@@ -279,7 +302,7 @@ export default function TicketDetailPage() {
       if (attachmentsError) {
         console.error(attachmentsError);
       } else {
-        // 🔒 filter private for non-admin
+        // Filter private for non-admin
         const safeAttachments = (attachmentsData || []).filter((att: any) => {
           if (att.privacy === 'private' && !isCurrentUserAdmin) return false;
           return true;
@@ -293,7 +316,7 @@ export default function TicketDetailPage() {
         setAttachments(withUrls);
       }
 
-      // 5. Messages
+      // 6. Messages
       const { data: messagesData, error: messagesError } = await supabase
         .from('ticket_messages')
         .select('*')
@@ -305,7 +328,7 @@ export default function TicketDetailPage() {
 
       setLoading(false);
 
-      // 6. BUILDING INFO
+      // 7. BUILDING INFO
       if (t.odoo_tenancy_id) {
         setLoadingBuildingInfo(true);
         try {
@@ -322,7 +345,7 @@ export default function TicketDetailPage() {
     load();
   }, [router, ticketId]);
 
-  // Pré-remplir le prompt externe avec une query simple optimisée Google Places
+  // Pré-remplir le prompt externe
   useEffect(() => {
     if (!ticket) return;
     if (!buildingInfo) return;
@@ -406,7 +429,7 @@ export default function TicketDetailPage() {
     }
   };
 
-  // --- MAIL HANDLERS (2 templates) ---
+  // --- MAIL HANDLERS ---
 
   const handlePrepareInquiryMail = async (vendorName: string, email: string | null | undefined) => {
     if (!email) {
@@ -417,7 +440,6 @@ export default function TicketDetailPage() {
 
     try {
       const photoLinksText = await buildSignedPhotoLinksText(attachments, { excludePrivate: true });
-
       const costRows: CostRow[] = Array.isArray(ticket.cost_table) ? ticket.cost_table : costTableRows;
 
       const mail = buildInquiryMail({
@@ -436,61 +458,56 @@ export default function TicketDetailPage() {
     }
   };
 
+  const handlePrepareOfferMail = async (vendorName: string, email?: string | null) => {
+    if (!email) return;
+    if (!ticket?.odoo_tenancy_id) return;
 
-const handlePrepareOfferMail = async (vendorName: string, email?: string | null) => {
-  if (!email) return;
-  if (!ticket?.odoo_tenancy_id) return;
+    const ctxRes = await getOfferMailContextAction(ticket.odoo_tenancy_id, ticket.tenant_id);
+    if (!ctxRes.success) {
+      alert(`Odoo error: ${ctxRes.error}`);
+      return;
+    }
 
-  const ctxRes = await getOfferMailContextAction(ticket.odoo_tenancy_id, ticket.tenant_id);
-  if (!ctxRes.success) {
-    alert(`Odoo error: ${ctxRes.error}`);
-    return;
-  }
+    const ctx = ctxRes.data;
+    const companyName = ctx?.building?.company_name ?? null;
 
-  const ctx = ctxRes.data;
+    const invoiceMailbox =
+      companyName === 'Fund IV'
+        ? 'inv-4@redefine.group'
+        : companyName === 'Eagle'
+        ? 'inv-eagle@redefine.group'
+        : 'inv@redefine.group';
 
-  // ✅ ICI (juste après ctx)
-  const companyName = ctx?.building?.company_name ?? null;
+    const mail = buildOfferMail({
+      vendorEmail: email,
+      vendorName,
+      description: ticket.description || ticket.title || 'Maßnahme',
 
-  const invoiceMailbox =
-    companyName === 'Fund IV'
-      ? 'inv-4@redefine.group'
-      : companyName === 'Eagle'
-      ? 'inv-eagle@redefine.group'
-      : 'inv@redefine.group';
+      ownerEntityName: ctx?.ownerEntity?.name ?? null,
+      ownerEntityAddress: ctx?.ownerEntity?.address ?? null,
+      ownerEntityVat: ctx?.ownerEntity?.vat ?? null,
 
-  const mail = buildOfferMail({
-    vendorEmail: email,
-    vendorName,
-    description: ticket.description || ticket.title || 'Maßnahme',
+      tenantName: ctx?.tenant?.name ?? null,
+      tenantAddress: ctx?.tenant?.address ?? null,
+      tenantEmail: ctx?.tenant?.email ?? null,
+      tenantPhone: ctx?.tenant?.phone ?? null,
 
-    ownerEntityName: ctx?.ownerEntity?.name ?? null,
-    ownerEntityAddress: ctx?.ownerEntity?.address ?? null,
-    ownerEntityVat: ctx?.ownerEntity?.vat ?? null,
+      beauftragungsummeBrutto: ticket.beauftragungsumme ?? null,
+      dueDateText: ticket.expected_enddate
+        ? `schnellstmöglich, wie besprochen, spätestens zum ${ticket.expected_enddate.slice(0, 10)}`
+        : null,
 
-    tenantName: ctx?.tenant?.name ?? null,
-    tenantAddress: ctx?.tenant?.address ?? null,
-    tenantEmail: ctx?.tenant?.email ?? null,
-    tenantPhone: ctx?.tenant?.phone ?? null,
+      invoiceMailbox,
+    });
 
-    beauftragungsummeBrutto: ticket.beauftragungsumme ?? null,
-    dueDateText: ticket.expected_enddate
-      ? `schnellstmöglich, wie besprochen, spätestens zum ${ticket.expected_enddate.slice(0, 10)}`
-      : null,
+    const href = `mailto:${encodeURIComponent(mail.to)}?subject=${encodeURIComponent(
+      mail.subject
+    )}&body=${encodeURIComponent(mail.body)}`;
 
-    invoiceMailbox, // ✅ et tu le passes ici
-  });
+    window.location.href = href;
+  };
 
-  const href = `mailto:${encodeURIComponent(mail.to)}?subject=${encodeURIComponent(
-    mail.subject
-  )}&body=${encodeURIComponent(mail.body)}`;
-
-  window.location.href = href;
-};
-
-
-
-  // --- MESSAGES ---
+  // --- MESSAGES & UPLOAD ---
 
   const handleSendMessage = async (e: FormEvent) => {
     e.preventDefault();
@@ -516,7 +533,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
     setSendingMessage(false);
   };
 
-  // 🆕 1. Fonction logique d'upload pure (réutilisable)
   const uploadFileToSupabase = async (file: File) => {
     if (!ticket || !currentUserId) return;
 
@@ -527,7 +543,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
       const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
       const path = `${ticket.tenant_id}/${ticket.id}/${Date.now()}-${safeName}`;
 
-      // A. Upload Storage
       const { error: uploadError } = await supabase.storage.from('ticket_attachments').upload(path, file, {
         contentType: file.type || undefined,
         upsert: false,
@@ -535,7 +550,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
 
       if (uploadError) throw uploadError;
 
-      // B. Insert DB
       const { data: insertData, error: dbError } = await supabase
         .from('ticket_attachments')
         .insert({
@@ -551,7 +565,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
 
       if (dbError) throw dbError;
 
-      // C. Get Public URL
       const { data: publicData } = supabase.storage.from('ticket_attachments').getPublicUrl(path);
 
       const newAtt: AttachmentWithUrl = {
@@ -569,14 +582,12 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
     }
   };
 
-  // 🆕 2. Handler pour l'input classique (click)
   const handleAdminFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) uploadFileToSupabase(file);
     e.target.value = '';
   };
 
-  // 🆕 3. Handlers pour le Drag & Drop
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(true);
@@ -591,7 +602,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
     e.preventDefault();
     setIsDragging(false);
     if (uploadingAttachment) return;
-
     const files = e.dataTransfer.files;
     if (files && files.length > 0) {
       uploadFileToSupabase(files[0]);
@@ -602,7 +612,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
 
   const handleLoadVendors = async () => {
     if (!ticket?.odoo_tenancy_id) return;
-
     setLoadingVendors(true);
     setVendorsLoaded(true);
 
@@ -645,25 +654,21 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
       alert('Der ausgewählte Dienstleister konnte nicht gespeichert werden.');
       return;
     }
-
     setTicket((prev) => (prev ? ({ ...prev, ...(data as any) } as TicketWithMeta) : prev));
   };
 
   const handleChooseExternalVendor = async (vendor: ExternalVendor) => {
     if (!ticket || !isAdminAm) return;
-
     const confirmMsg = `"${vendor.name}" als Hauptdienstleister für dieses Ticket auswählen?`;
     if (!window.confirm(confirmMsg)) return;
 
     try {
       const res = await saveChosenExternalVendorAction(ticket.id, vendor);
-
       if (!res.success) {
         console.error('[handleChooseExternalVendor] error', res.error);
         alert('Der ausgewählte externe Dienstleister konnte nicht gespeichert werden.');
         return;
       }
-
       setTicket(res.ticket as TicketWithMeta);
     } catch (err) {
       console.error('[handleChooseExternalVendor] unexpected error', err);
@@ -700,19 +705,15 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
         alert('Reset odoo_vendor_id a échoué.');
         return;
       }
-
       const res = await importChosenVendorToOdooAction(ticketId);
-
       if (!res.success) {
         alert(`Import error: ${res.error}`);
         return;
       }
-
       if (res.alreadyImported) {
         alert('Dieser Dienstleister existiert bereits in Odoo.');
         return;
       }
-
       alert('Import OK!');
     } catch (e) {
       console.error(e);
@@ -730,15 +731,42 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
     setUpdatingAction(null);
   };
 
-  const handleCloseOver5000 = async () => {
+  // ✅ Suppression de handleCloseOver5000 et ajout de la logique >5k Luxembourg
+
+  const handleToggleOver5k = async () => {
     if (!ticket) return;
-    setUpdatingAction('over_5000');
+    const newVal = !ticket.over_5k;
+    
+    // Optimistic
+    setTicket((prev) => (prev ? { ...prev, over_5k: newVal } : prev));
+
     const { error } = await supabase
       .from('tickets')
-      .update({ status: 'closed', closed_reason: 'over_5000' })
+      .update({ over_5k: newVal })
       .eq('id', ticket.id);
-    if (!error) setTicket((prev) => (prev ? { ...prev, status: 'closed', closed_reason: 'over_5000' } : prev));
-    setUpdatingAction(null);
+
+    if (error) {
+      console.error('Error updating over_5k', error);
+      setTicket((prev) => (prev ? { ...prev, over_5k: !newVal } : prev));
+      alert('Fehler beim Speichern.');
+    }
+  };
+
+  const handleToggleLuxApproved = async () => {
+    if (!ticket) return;
+    const newVal = !ticket.lux_approved;
+
+    setTicket((prev) => (prev ? { ...prev, lux_approved: newVal } : prev));
+
+    const { error } = await supabase
+      .from('tickets')
+      .update({ lux_approved: newVal })
+      .eq('id', ticket.id);
+
+    if (error) {
+      console.error('Error updating lux_approved', error);
+      setTicket((prev) => (prev ? { ...prev, lux_approved: !newVal } : prev));
+    }
   };
 
   const handleCloseTenantLiability = async () => {
@@ -797,7 +825,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
           : prev
       );
     }
-
     setSavingChecklistKey(null);
   };
 
@@ -840,23 +867,19 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
     setDraft?: (v: string) => void
   ) => {
     if (!ticket) return;
-
     setSaving(true);
-
     const val = draftValue.trim() ? parseFloat(draftValue.replace(',', '.')) : null;
     if (val !== null && isNaN(val)) {
       alert('Invalide Zahl');
       setSaving(false);
       return;
     }
-
     const { error } = await supabase.from('tickets').update({ [field]: val } as any).eq('id', ticket.id).select('*').single();
 
     if (!error) {
       setTicket((prev) => (prev ? ({ ...prev, [field]: val } as any) : prev));
       if (setDraft) setDraft(val === null ? '' : String(val));
     }
-
     setSaving(false);
   };
 
@@ -974,7 +997,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
 
           {isAdminAm && (
             <div className="flex items-center gap-3">
-              {/* ✅ removed PDF Generieren button */}
               <button
                 onClick={() => router.push('/backoffice/tickets')}
                 className="bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-800 transition shadow-sm"
@@ -1036,7 +1058,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
                 </p>
               )}
             </div>
-
             <div className="text-3xl opacity-20">🏢</div>
           </div>
         )}
@@ -1086,6 +1107,41 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
             </div>
           )}
 
+          {/* ✅ BLOC ALERTE LUXEMBOURG (visible si >5k) */}
+          {ticket.over_5k && (
+            <div className={`mt-6 border-l-4 p-4 rounded-r-md flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors ${
+              ticket.lux_approved 
+                ? 'bg-green-50 border-green-500 text-green-800' 
+                : 'bg-amber-50 border-amber-500 text-amber-800'
+            }`}>
+              <div className="flex items-start gap-3">
+                <span className="text-xl">{ticket.lux_approved ? '✅' : '⚠️'}</span>
+                <div>
+                  <h4 className="font-bold text-sm uppercase tracking-wide">
+                    Luxembourg Process Required
+                  </h4>
+                  <p className="text-sm mt-1">
+                    {ticket.lux_approved 
+                      ? 'Genehmigt: Unterschrift aus Luxemburg liegt vor.'
+                      : 'Achtung: Unterschrift aus Luxemburg ist erforderlich, bevor beauftragt wird.'}
+                  </p>
+                </div>
+              </div>
+
+              {isAdminAm && (
+                <label className="flex items-center gap-2 cursor-pointer bg-white px-3 py-2 rounded border border-gray-200 shadow-sm hover:bg-gray-50 select-none">
+                  <input 
+                    type="checkbox" 
+                    checked={!!ticket.lux_approved} 
+                    onChange={handleToggleLuxApproved}
+                    className="rounded border-gray-300 text-green-600 focus:ring-green-600 w-5 h-5"
+                  />
+                  <span className="font-semibold text-sm">Signed by Lux</span>
+                </label>
+              )}
+            </div>
+          )}
+
           {/* ADMIN CONTROLS */}
           {isAdminAm && (
             <div className="mt-8 pt-6 border-t border-gray-100">
@@ -1106,7 +1162,22 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
                   </select>
                 </div>
 
-                <div className="flex gap-3">
+                {/* ✅ TOGGLE > 5k */}
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <div className="relative">
+                    <input 
+                      type="checkbox" 
+                      className="sr-only" 
+                      checked={!!ticket.over_5k}
+                      onChange={handleToggleOver5k}
+                    />
+                    <div className={`block w-10 h-6 rounded-full transition ${ticket.over_5k ? 'bg-amber-500' : 'bg-gray-300'}`}></div>
+                    <div className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition transform ${ticket.over_5k ? 'translate-x-4' : ''}`}></div>
+                  </div>
+                  <span className="text-sm font-medium text-gray-700">Ticket &gt; 5.000 € ?</span>
+                </label>
+
+                <div className="flex gap-3 ml-auto">
                   {(ticket.status === 'new' || ticket.status === 'closed') && (
                     <button
                       onClick={handleOpenTicket}
@@ -1118,22 +1189,13 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
                   )}
 
                   {ticket.status !== 'closed' && (
-                    <>
-                      <button
-                        onClick={handleCloseOver5000}
-                        disabled={!!updatingAction}
-                        className="px-3 py-1.5 bg-white border border-red-200 text-red-700 rounded-lg text-sm font-medium hover:bg-red-50 transition"
-                      >
-                        Schließen (&gt; 5k€)
-                      </button>
-                      <button
-                        onClick={handleCloseTenantLiability}
-                        disabled={!!updatingAction}
-                        className="px-3 py-1.5 bg-white border border-red-200 text-red-700 rounded-lg text-sm font-medium hover:bg-red-50 transition"
-                      >
-                        Schließen (Mieter)
-                      </button>
-                    </>
+                    <button
+                      onClick={handleCloseTenantLiability}
+                      disabled={!!updatingAction}
+                      className="px-3 py-1.5 bg-white border border-red-200 text-red-700 rounded-lg text-sm font-medium hover:bg-red-50 transition"
+                    >
+                      Schließen (Mieter)
+                    </button>
                   )}
                 </div>
               </div>
@@ -1210,7 +1272,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h2 className="text-lg font-bold text-gray-900">Zugeordnete Dienstleister (Odoo)</h2>
-
                 {ticket.chosen_tgm && (
                   <div className="mt-2 text-sm">
                     <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
@@ -1237,7 +1298,7 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
               <div className="space-y-4">
                 {loadingVendors ? (
                   <div className="text-sm text-gray-500 animate-pulse">
-                    Suche nach Dienstleistern mit den Tags &quot;Maintenance&quot; + Gebäude-Tag...
+                    Suche nach Dienstleistern mit den Tags "Maintenance" + Gebäude-Tag...
                   </div>
                 ) : vendors.length === 0 ? (
                   <div className="p-4 bg-gray-50 text-gray-600 rounded-lg text-sm border border-gray-200 italic">
@@ -1247,7 +1308,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
                   <div className="grid md:grid-cols-2 gap-4">
                     {vendors.map((vendor) => {
                       const isChosen = ticket.chosen_tgm === vendor.name;
-
                       return (
                         <div
                           key={vendor.id}
@@ -1294,7 +1354,7 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
                                     onClick={() => handlePrepareInquiryMail(vendor.name as string, vendor.email as string)}
                                     className="text-xs mt-1 px-2 py-1 rounded border border-blue-500 text-blue-700 bg-blue-50 hover:bg-blue-100"
                                   >
-                                    Mail vorbereiten
+                                    Mail vorbereiten - First contact
                                   </button>
 
                                   <button
@@ -1314,13 +1374,11 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
                                 📍 <span className="font-mono">{[vendor.street, vendor.zip, vendor.city].filter(Boolean).join(' ')}</span>
                               </div>
                             )}
-
                             {vendor.phone && (
                               <div>
                                 📞 <span className="font-mono">{vendor.phone}</span>
                               </div>
                             )}
-
                             {vendor.email && (
                               <div>
                                 ✉️{' '}
@@ -1345,7 +1403,7 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 mt-6">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
               <div>
-                <h2 className="text-lg font-bold text-gray-900">Externe Dienstleister (Web &amp; KI)</h2>
+                <h2 className="text-lg font-bold text-gray-900">Externe Dienstleister (Web & KI)</h2>
                 <p className="text-xs text-gray-500 mt-1">
                   Online-Suche nach lokalen Dienstleistern (Google, Bewertungen usw.). Ergebnisse bitte vor der Auftragsvergabe prüfen.
                 </p>
@@ -1445,7 +1503,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
                   <div className="grid md:grid-cols-2 gap-4">
                     {externalVendors.map((vendor) => {
                       const isChosen = ticket.chosen_tgm === vendor.name;
-
                       return (
                         <div
                           key={vendor.id}
@@ -1458,7 +1515,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
                           <div className="flex justify-between items-start gap-2">
                             <div>
                               <h4 className="font-bold text-gray-900">{vendor.name}</h4>
-
                               {vendor.rating !== null && vendor.rating !== undefined && (
                                 <div className="mt-1 flex items-center gap-2 text-xs">
                                   <span className="inline-flex items-center gap-1 text-amber-600 font-semibold">
@@ -1469,13 +1525,11 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
                                   )}
                                 </div>
                               )}
-
                               {isChosen && (
                                 <span className="mt-1 inline-flex items-center gap-1 text-xs text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
                                   ✅ Ausgewählt
                                 </span>
                               )}
-
                               {vendor.source && <p className="text-[10px] text-gray-400 mt-1">Source : {vendor.source}</p>}
                             </div>
 
@@ -1775,7 +1829,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
                               placeholder="Beschreibung"
                             />
                           </td>
-
                           <td className="p-2">
                             <input
                               type="text"
@@ -1785,7 +1838,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
                               placeholder="300"
                             />
                           </td>
-
                           <td className="p-2">
                             <input
                               type="text"
@@ -1795,7 +1847,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
                               placeholder="0.00"
                             />
                           </td>
-
                           <td className="p-2">
                             <input
                               type="text"
@@ -1805,7 +1856,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
                               placeholder="..."
                             />
                           </td>
-
                           <td className="p-2">
                             <select
                               className="w-full text-xs border-transparent bg-transparent focus:border-gray-300 focus:bg-white rounded px-1 py-1"
@@ -1818,7 +1868,6 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
                               <option value="total">Total</option>
                             </select>
                           </td>
-
                           <td className="p-2 text-center">
                             <button
                               onClick={() => handleDeleteCostRow(row.id)}
@@ -2002,8 +2051,7 @@ const handlePrepareOfferMail = async (vendorName: string, email?: string | null)
           </div>
         </div>
 
-        {/* (Optionnel) Admin notes – je te le laisse car tu l’avais en state,
-            mais tu peux le supprimer si tu ne l’utilises plus */}
+        {/* Admin notes */}
         {isAdminAm && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
             <div className="flex items-center justify-between mb-3">
