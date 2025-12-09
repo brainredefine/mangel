@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabaseClient';
+import { getTenancyNamesAction } from './actions';
 
 // --- TYPES ---
 
@@ -21,8 +22,16 @@ type Ticket = {
   priority: 'low' | 'medium' | 'high';
   status: TicketStatus;
   created_at: string;
-  tenant_id: string; // On le garde dans l'objet ticket, mais on ne charge plus les infos "Tenant" à côté
+  tenant_id: string;
   cost_estimated: number | null;
+  pm: string | null;
+  
+  odoo_tenancy_id: number | null;
+  
+  // Champs d'affichage enrichis par l'action Odoo
+  display_tenancy_name?: string; 
+  display_property_id?: string;
+  asset_name?: string; 
 };
 
 export default function BackofficeTicketsPage() {
@@ -32,24 +41,17 @@ export default function BackofficeTicketsPage() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [claimingId, setClaimingId] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
       setErrorMsg(null);
 
-      // 1) Utilisateur connecté
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+      // 1) Auth & Profil
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) { router.push('/sign-in'); return; }
 
-      if (userError || !user) {
-        router.push('/sign-in');
-        return;
-      }
-
-      // 2) Profil
       const { data: profileData, error: profileError } = await supabase
         .from('profiles')
         .select('id, role, full_name')
@@ -57,129 +59,128 @@ export default function BackofficeTicketsPage() {
         .single();
 
       if (profileError || !profileData) {
-        console.error(profileError);
         setErrorMsg("Profil konnte nicht geladen werden.");
         setLoading(false);
         return;
       }
-
-      const p = profileData as Profile;
-      setProfile(p);
-
-      if (p.role !== 'admin_am') {
+      setProfile(profileData as Profile);
+      if (profileData.role !== 'admin_am') {
         setErrorMsg("Zugriff verweigert: Nur für Asset Manager.");
         setLoading(false);
         return;
       }
 
-      // 3) Tickets (Tous sauf closed)
+      // 2) Charger les Tickets depuis Supabase
       const { data: ticketsData, error: ticketsError } = await supabase
         .from('tickets')
-        .select('*')
+        .select('*') 
         .neq('status', 'closed')
         .order('created_at', { ascending: false });
 
       if (ticketsError) {
-        console.error(ticketsError);
         setErrorMsg("Fehler beim Laden der Tickets.");
         setLoading(false);
         return;
       }
 
-      setTickets((ticketsData || []) as Ticket[]);
+      const rawTickets = (ticketsData || []) as Ticket[];
+      setTickets(rawTickets);
       setLoading(false);
+
+      // 3) ENRICHISSEMENT ODOO
+      const idsToFetch = rawTickets
+        .map(t => t.odoo_tenancy_id)
+        .filter((id): id is number => id !== null && id > 0);
+
+      if (idsToFetch.length > 0) {
+        const res = await getTenancyNamesAction(idsToFetch);
+        if (res.success && res.data) {
+          const map = res.data;
+          setTickets(currentTickets => 
+            currentTickets.map(t => {
+              if (t.odoo_tenancy_id && map[t.odoo_tenancy_id]) {
+                return {
+                  ...t,
+                  display_tenancy_name: map[t.odoo_tenancy_id].name,
+                  display_property_id: map[t.odoo_tenancy_id].property_id
+                };
+              }
+              return t;
+            })
+          );
+        }
+      }
     };
 
     load();
   }, [router]);
 
+  // --- ACTIONS ---
+  const handleClaim = async (e: React.MouseEvent, ticketId: string) => {
+    e.stopPropagation(); // Empêche d'ouvrir le ticket
+    if (!profile?.full_name) {
+        alert("Votre profil n'a pas de nom complet configuré.");
+        return;
+    }
+    setClaimingId(ticketId);
+    
+    // Update Supabase
+    const { error } = await supabase
+        .from('tickets')
+        .update({ pm: profile.full_name })
+        .eq('id', ticketId);
+
+    if (!error) {
+      // Update local (Optimistic UI)
+      setTickets((prev) => 
+        prev.map((t) => t.id === ticketId ? { ...t, pm: profile.full_name || 'Moi' } : t)
+      );
+    } else {
+        console.error("Erreur claim:", error);
+    }
+    setClaimingId(null);
+  };
+
   // --- HELPERS ---
-
-  const formatDate = (iso: string) => {
-    try {
-      return new Date(iso).toLocaleString('de-DE', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-    } catch {
-      return iso;
-    }
-  };
-
-  const formatCost = (value: number | null | undefined) => {
-    if (value === null || value === undefined) return <span className="text-gray-300">—</span>;
-    try {
-      return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value);
-    } catch {
-      return `${value} €`;
-    }
-  };
-
+  const formatDate = (iso: string) => new Date(iso).toLocaleDateString('de-DE');
+  const formatCost = (value: number | null | undefined) => value ? `${value} €` : '—';
+  
   const getPriorityLabel = (p: string) => {
-    switch (p) {
-      case 'high':
-        return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-50 text-red-700 border border-red-100">Hoch</span>;
-      case 'medium':
-        return <span className="text-gray-700">Normal</span>;
-      case 'low':
-        return <span className="text-gray-500">Niedrig</span>;
-      default:
-        return <span className="text-gray-500">{p}</span>;
-    }
+    if(p==='high') return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-50 text-red-700 border border-red-100">Hoch</span>;
+    if(p==='medium') return <span className="text-gray-700 text-xs">Normal</span>;
+    return <span className="text-gray-500 text-xs">Niedrig</span>;
   };
-
+  
   const getStatusLabel = (s: TicketStatus) => {
     switch (s) {
-      case 'new':
-        return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">Neu</span>;
-      case 'open':
-        return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-100">Offen</span>;
-      case 'in_progress':
-        return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-50 text-purple-700 border border-purple-100">In Bearbeitung</span>;
-      case 'closed':
-        return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 border border-gray-200">Geschlossen</span>;
-      default:
-        return s;
+      case 'new': return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">Neu</span>;
+      case 'open': return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-100">Offen</span>;
+      case 'in_progress': return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-50 text-purple-700 border border-purple-100">In Bearbeitung</span>;
+      case 'closed': return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 border border-gray-200">Geschlossen</span>;
+      default: return <span>{s}</span>;
     }
   };
 
   // --- RENDER ---
+  if (loading) return (
+    <main className="min-h-screen w-full bg-gray-100 flex items-center justify-center">
+      <div className="w-8 h-8 border-4 border-gray-300 border-t-black rounded-full animate-spin" />
+    </main>
+  );
 
-  if (loading) {
-    return (
-      <main className="min-h-screen w-full bg-gray-100 flex items-center justify-center">
-        <div className="w-8 h-8 border-4 border-gray-300 border-t-black rounded-full animate-spin" />
-      </main>
-    );
-  }
-
-  if (errorMsg) {
-    return (
-      <main className="min-h-screen w-full bg-gray-100 flex items-center justify-center p-6">
-        <div className="bg-white p-8 rounded-xl shadow-sm border border-red-100 max-w-md w-full text-center space-y-6">
-          <div className="w-12 h-12 bg-red-50 rounded-full flex items-center justify-center mx-auto text-red-600 text-xl">🚫</div>
-          <div>
-            <h3 className="text-lg font-semibold text-gray-900">Zugriff verweigert</h3>
-            <p className="text-sm text-gray-500 mt-2">{errorMsg}</p>
-          </div>
-          <button
-            className="w-full bg-gray-900 text-white px-4 py-2 rounded-lg hover:bg-gray-800 transition"
-            onClick={() => router.push('/dashboard')}
-          >
-            Zurück zum Dashboard
-          </button>
+  if (errorMsg) return (
+    <main className="min-h-screen w-full bg-gray-100 flex items-center justify-center p-6">
+        <div className="bg-white p-8 rounded-xl shadow-sm border border-red-100 max-w-md w-full text-center">
+            <p className="text-red-600 font-medium">{errorMsg}</p>
+            <button onClick={() => router.push('/dashboard')} className="mt-4 text-sm underline">Dashboard</button>
         </div>
-      </main>
-    );
-  }
+    </main>
+  );
 
   return (
     <main className="min-h-screen w-full bg-gray-100 flex flex-col items-center p-6 text-gray-900">
       
-      {/* Header (Même style que Dashboard) */}
+      {/* Header */}
       <div className="w-full max-w-7xl flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
          <div className="text-center md:text-left">
             <h1 className="text-3xl font-semibold text-gray-900">Backoffice Tickets</h1>
@@ -187,23 +188,18 @@ export default function BackofficeTicketsPage() {
               {profile?.full_name ? `Eingeloggt als ${profile.full_name}` : 'Asset Management Übersicht'}
             </p>
          </div>
-         <button
-          onClick={() => router.push('/dashboard')}
-          className="text-sm text-gray-500 hover:text-gray-900 font-medium transition-colors px-4 py-2 rounded-lg hover:bg-gray-200 border border-transparent hover:border-gray-300"
-        >
+         <button onClick={() => router.push('/dashboard')} className="text-sm text-gray-500 hover:text-gray-900 font-medium transition-colors px-4 py-2 rounded-lg hover:bg-gray-200 border border-transparent hover:border-gray-300">
           ← Dashboard
         </button>
       </div>
 
       <div className="w-full max-w-7xl space-y-6">
         
-        {/* Table Card (Style "clean" comme le dashboard) */}
+        {/* Table Card */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           {tickets.length === 0 ? (
             <div className="p-16 text-center space-y-4">
-              <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto text-3xl text-gray-400 grayscale">
-                🎉
-              </div>
+              <div className="text-3xl grayscale">🎉</div>
               <div>
                 <h3 className="text-lg font-medium text-gray-900">Alles erledigt</h3>
                 <p className="text-sm text-gray-500 mt-1">Keine offenen Tickets im System.</p>
@@ -214,12 +210,14 @@ export default function BackofficeTicketsPage() {
               <table className="w-full text-sm text-left">
                 <thead className="bg-gray-50 border-b border-gray-100 text-xs uppercase font-semibold text-gray-500">
                   <tr>
-                    <th className="px-6 py-4 w-40">Datum</th>
-                    <th className="px-6 py-4">Details</th>
+                    <th className="px-6 py-4 w-32">Datum</th>
+                    <th className="px-6 py-4 w-48">Mieter</th>
+                    <th className="px-6 py-4">Ticket</th>
                     <th className="px-6 py-4 w-32">Priorität</th>
-                    <th className="px-6 py-4 w-32 text-right">Kosten (Est.)</th>
-                    <th className="px-6 py-4 w-40 text-center">Status</th>
-                    <th className="px-6 py-4 w-16"></th>
+                    <th className="px-6 py-4 w-40">Verantwortlich (PM)</th>
+                    <th className="px-6 py-4 w-32 text-right">Kosten</th>
+                    <th className="px-6 py-4 w-32 text-center">Status</th>
+                    <th className="px-6 py-4 w-10"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -229,9 +227,22 @@ export default function BackofficeTicketsPage() {
                       className="hover:bg-gray-50 transition group cursor-pointer"
                       onClick={() => router.push(`/tickets/${t.id}`)}
                     >
+                      {/* DATE */}
                       <td className="px-6 py-4 text-gray-500 whitespace-nowrap align-top font-mono text-xs">
                         {formatDate(t.created_at)}
                       </td>
+
+                      {/* MIETER (SIMPLIFIÉ) */}
+                      <td className="px-6 py-4 align-top">
+                        <span className="font-medium text-gray-900 block">
+                            {t.display_tenancy_name 
+                              ? t.display_tenancy_name 
+                              : (t.odoo_tenancy_id ? `Tenancy #${t.odoo_tenancy_id}` : 'N/A')
+                            }
+                        </span>
+                      </td>
+
+                      {/* DETAILS TICKET */}
                       <td className="px-6 py-4 align-top">
                         <div className="font-semibold text-gray-900 text-base mb-1 group-hover:text-blue-600 transition-colors">
                           {t.title}
@@ -242,15 +253,64 @@ export default function BackofficeTicketsPage() {
                           </div>
                         )}
                       </td>
+
+                      {/* PRIORITE */}
                       <td className="px-6 py-4 align-top">
                         {getPriorityLabel(t.priority)}
                       </td>
+
+                      {/* PM / CLAIM BUTTON (AVEC OVERRIDE) */}
+                      <td className="px-6 py-4 align-top">
+                        {t.pm ? (
+                            <div className="flex flex-col items-start gap-1">
+                                {/* Affichage du PM actuel */}
+                                <div className="flex items-center gap-2">
+                                    <div className="w-6 h-6 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center text-xs font-bold">
+                                        {t.pm.charAt(0)}
+                                    </div>
+                                    <span className="text-sm text-gray-700 truncate max-w-[120px]" title={t.pm}>
+                                        {t.pm}
+                                    </span>
+                                </div>
+                                
+                                {/* Bouton OVERRIDE si ce n'est pas moi */}
+                                {t.pm !== profile?.full_name && (
+                                    <button
+                                        onClick={(e) => handleClaim(e, t.id)}
+                                        disabled={claimingId === t.id}
+                                        className="text-[10px] text-gray-400 hover:text-blue-600 hover:underline flex items-center gap-1 transition-colors ml-8"
+                                    >
+                                        {claimingId === t.id ? '...' : '→ Übernehmen'}
+                                    </button>
+                                )}
+                            </div>
+                        ) : (
+                            <button
+                                onClick={(e) => handleClaim(e, t.id)}
+                                disabled={claimingId === t.id}
+                                className="text-xs border border-gray-300 bg-white hover:bg-gray-50 hover:border-gray-400 text-gray-700 px-3 py-1.5 rounded-md shadow-sm transition flex items-center gap-1.5"
+                            >
+                                {claimingId === t.id ? (
+                                    <span className="animate-spin h-3 w-3 border-2 border-gray-400 border-t-transparent rounded-full"></span>
+                                ) : (
+                                    <span>🙋‍♂️</span>
+                                )}
+                                Übernehmen
+                            </button>
+                        )}
+                      </td>
+
+                      {/* KOSTEN */}
                       <td className="px-6 py-4 align-top text-right font-mono text-gray-700">
                         {formatCost(t.cost_estimated)}
                       </td>
+
+                      {/* STATUS */}
                       <td className="px-6 py-4 align-top text-center">
                         {getStatusLabel(t.status)}
                       </td>
+
+                      {/* FLECHE */}
                       <td className="px-6 py-4 align-middle text-right text-gray-300 group-hover:text-gray-900 transition-colors">
                         →
                       </td>

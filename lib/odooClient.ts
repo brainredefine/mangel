@@ -755,3 +755,76 @@ export async function fetchOfferMailContext(params: {
       : null,
   };
 }
+
+/**
+ * 5️⃣ Récupère les noms et main_property_id pour une liste d'IDs de tenancy.
+ * Utilisé par le Backoffice pour enrichir la liste des tickets.
+ */
+export async function fetchTenanciesNamesByIds(ids: (number | string)[]) {
+  console.log("⚡ [OdooClient] fetchTenanciesNamesByIds called with IDs:", ids);
+
+  if (!ids || ids.length === 0) return {};
+
+  // 1. Conversion impérative en NUMBER et dédoublonnage
+  const uniqueIds = Array.from(new Set(ids.map(id => Number(id)))).filter((id) => !isNaN(id) && id > 0);
+
+  console.log("🔢 [OdooClient] Converted IDs for Odoo:", uniqueIds);
+
+  if (uniqueIds.length === 0) return {};
+
+  return new Promise<Record<number, { name: string; property_id: string }>>((resolve, reject) => {
+    const { client, common } = createOdooClient();
+
+    authenticate(common)
+      .then((uid) => {
+        client.methodCall(
+          'execute_kw',
+          [
+            ODOO_CONFIG.db,
+            uid,
+            ODOO_CONFIG.password,
+            TENANCY_MODEL, // 'property.tenancy'
+            'read',        // Méthode read
+            [uniqueIds],   // IDs (Integers)
+            {
+              fields: ['id', 'name', 'main_property_id'],
+              // Contexte pour inclure les éléments archivés (active: false)
+              context: { active_test: false } 
+            },
+          ],
+          (readErr: any, results: any[]) => {
+            if (readErr) {
+              console.error('❌ [OdooClient] read error:', readErr);
+              return reject(readErr);
+            }
+
+            console.log(`✅ [OdooClient] Received ${results?.length} items from Odoo`);
+
+            const map: Record<number, { name: string; property_id: string }> = {};
+
+            if (results && Array.isArray(results)) {
+              results.forEach((item) => {
+                // Odoo renvoie main_property_id sous forme [id, "Nom"] ou false
+                let propIdStr = '';
+                if (Array.isArray(item.main_property_id) && item.main_property_id.length > 0) {
+                  propIdStr = String(item.main_property_id[0]);
+                } else if (item.main_property_id) {
+                    propIdStr = String(item.main_property_id);
+                }
+
+                map[item.id] = {
+                  name: item.name || '',
+                  property_id: propIdStr,
+                };
+              });
+            }
+            resolve(map);
+          }
+        );
+      })
+      .catch((err) => {
+        console.error('❌ [OdooClient] Auth failed:', err);
+        reject(err);
+      });
+  });
+}
