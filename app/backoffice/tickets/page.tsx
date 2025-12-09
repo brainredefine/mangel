@@ -28,7 +28,6 @@ type Ticket = {
   
   odoo_tenancy_id: number | null;
   
-  // Champs d'affichage enrichis par l'action Odoo
   display_tenancy_name?: string; 
   display_property_id?: string;
   asset_name?: string; 
@@ -70,7 +69,7 @@ export default function BackofficeTicketsPage() {
         return;
       }
 
-      // 2) Charger les Tickets depuis Supabase
+      // 2) Tickets
       const { data: ticketsData, error: ticketsError } = await supabase
         .from('tickets')
         .select('*') 
@@ -87,7 +86,7 @@ export default function BackofficeTicketsPage() {
       setTickets(rawTickets);
       setLoading(false);
 
-      // 3) ENRICHISSEMENT ODOO
+      // 3) Enrichissement Odoo
       const idsToFetch = rawTickets
         .map(t => t.odoo_tenancy_id)
         .filter((id): id is number => id !== null && id > 0);
@@ -117,26 +116,20 @@ export default function BackofficeTicketsPage() {
 
   // --- ACTIONS ---
   const handleClaim = async (e: React.MouseEvent, ticketId: string) => {
-    e.stopPropagation(); // Empêche d'ouvrir le ticket
+    e.stopPropagation();
     if (!profile?.full_name) {
-        alert("Votre profil n'a pas de nom complet configuré.");
+        alert("Profil ohne Namen.");
         return;
     }
     setClaimingId(ticketId);
     
-    // Update Supabase
     const { error } = await supabase
         .from('tickets')
         .update({ pm: profile.full_name })
         .eq('id', ticketId);
 
     if (!error) {
-      // Update local (Optimistic UI)
-      setTickets((prev) => 
-        prev.map((t) => t.id === ticketId ? { ...t, pm: profile.full_name || 'Moi' } : t)
-      );
-    } else {
-        console.error("Erreur claim:", error);
+      setTickets((prev) => prev.map((t) => t.id === ticketId ? { ...t, pm: profile.full_name || 'Moi' } : t));
     }
     setClaimingId(null);
   };
@@ -195,7 +188,6 @@ export default function BackofficeTicketsPage() {
 
       <div className="w-full max-w-7xl space-y-6">
         
-        {/* Table Card */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           {tickets.length === 0 ? (
             <div className="p-16 text-center space-y-4">
@@ -214,7 +206,7 @@ export default function BackofficeTicketsPage() {
                     <th className="px-6 py-4 w-48">Mieter</th>
                     <th className="px-6 py-4">Ticket</th>
                     <th className="px-6 py-4 w-32">Priorität</th>
-                    <th className="px-6 py-4 w-40">Verantwortlich (PM)</th>
+                    <th className="px-6 py-4 w-44">Verantwortlich (PM)</th> {/* Un peu plus large */}
                     <th className="px-6 py-4 w-32 text-right">Kosten</th>
                     <th className="px-6 py-4 w-32 text-center">Status</th>
                     <th className="px-6 py-4 w-10"></th>
@@ -227,12 +219,10 @@ export default function BackofficeTicketsPage() {
                       className="hover:bg-gray-50 transition group cursor-pointer"
                       onClick={() => router.push(`/tickets/${t.id}`)}
                     >
-                      {/* DATE */}
                       <td className="px-6 py-4 text-gray-500 whitespace-nowrap align-top font-mono text-xs">
                         {formatDate(t.created_at)}
                       </td>
 
-                      {/* MIETER (SIMPLIFIÉ) */}
                       <td className="px-6 py-4 align-top">
                         <span className="font-medium text-gray-900 block">
                             {t.display_tenancy_name 
@@ -242,7 +232,6 @@ export default function BackofficeTicketsPage() {
                         </span>
                       </td>
 
-                      {/* DETAILS TICKET */}
                       <td className="px-6 py-4 align-top">
                         <div className="font-semibold text-gray-900 text-base mb-1 group-hover:text-blue-600 transition-colors">
                           {t.title}
@@ -254,16 +243,15 @@ export default function BackofficeTicketsPage() {
                         )}
                       </td>
 
-                      {/* PRIORITE */}
                       <td className="px-6 py-4 align-top">
                         {getPriorityLabel(t.priority)}
                       </td>
 
-                      {/* PM / CLAIM BUTTON (AVEC OVERRIDE) */}
+                      {/* --- COLONNE PM (MODIFIÉE) --- */}
                       <td className="px-6 py-4 align-top">
                         {t.pm ? (
                             <div className="flex flex-col items-start gap-1">
-                                {/* Affichage du PM actuel */}
+                                {/* Le PM actuel */}
                                 <div className="flex items-center gap-2">
                                     <div className="w-6 h-6 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center text-xs font-bold">
                                         {t.pm.charAt(0)}
@@ -273,14 +261,18 @@ export default function BackofficeTicketsPage() {
                                     </span>
                                 </div>
                                 
-                                {/* Bouton OVERRIDE si ce n'est pas moi */}
+                                {/* Bouton OVERRIDE visible en bleu */}
                                 {t.pm !== profile?.full_name && (
                                     <button
                                         onClick={(e) => handleClaim(e, t.id)}
                                         disabled={claimingId === t.id}
-                                        className="text-[10px] text-gray-400 hover:text-blue-600 hover:underline flex items-center gap-1 transition-colors ml-8"
+                                        className="text-xs text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1 transition-colors mt-1"
                                     >
-                                        {claimingId === t.id ? '...' : '→ Übernehmen'}
+                                        {claimingId === t.id ? (
+                                            <span className="animate-spin h-3 w-3 border-2 border-blue-600 border-t-transparent rounded-full"></span>
+                                        ) : (
+                                            <span>↳ Übernehmen</span>
+                                        )}
                                     </button>
                                 )}
                             </div>
@@ -300,17 +292,14 @@ export default function BackofficeTicketsPage() {
                         )}
                       </td>
 
-                      {/* KOSTEN */}
                       <td className="px-6 py-4 align-top text-right font-mono text-gray-700">
                         {formatCost(t.cost_estimated)}
                       </td>
 
-                      {/* STATUS */}
                       <td className="px-6 py-4 align-top text-center">
                         {getStatusLabel(t.status)}
                       </td>
 
-                      {/* FLECHE */}
                       <td className="px-6 py-4 align-middle text-right text-gray-300 group-hover:text-gray-900 transition-colors">
                         →
                       </td>
