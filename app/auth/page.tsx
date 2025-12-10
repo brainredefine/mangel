@@ -19,7 +19,7 @@ export default function AuthPage() {
   const [mode, setMode] = useState<AuthMode>(initialMode);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'error' | 'success', text: string } | null>(
-    errorParam ? { type: 'error', text: 'Une erreur est survenue lors de l\'authentification.' } : null
+    errorParam ? { type: 'error', text: 'An error occured.' } : null
   );
 
 // --- 1. GESTION CRITIQUE DU MOT DE PASSE OUBLIÉ ---
@@ -29,7 +29,7 @@ export default function AuthPage() {
     // Si on détecte le token de récupération
     if (hash && hash.includes('type=recovery')) {
       setLoading(true);
-      setMessage({ type: 'success', text: 'Token détecté. Redirection vers le changement de mot de passe...' });
+      setMessage({ type: 'success', text: 'Token detected. Redirecting...' });
       
       // ASTUCE CRUCIALE : On redirige EN GARDANT LE HASH
       // Ainsi la page suivante pourra lire le token et créer la session
@@ -68,7 +68,7 @@ export default function AuthPage() {
     });
 
     if (error) {
-      setMessage({ type: 'error', text: "Email ou mot de passe incorrect." });
+      setMessage({ type: 'error', text: "Incorrect email or password." });
       setLoading(false);
     } else {
       // Le middleware gère la protection, mais on force la redirection pour l'UX
@@ -89,12 +89,12 @@ export default function AuthPage() {
     const p2 = formData.get('confirmPassword') as string;
     
     if (p1 !== p2) {
-        setMessage({ type: 'error', text: "Les mots de passe ne correspondent pas." });
+        setMessage({ type: 'error', text: "Passwords need to be the same." });
         setLoading(false);
         return;
     }
-    if (p1.length < 6) {
-        setMessage({ type: 'error', text: "Le mot de passe doit faire au moins 6 caractères." });
+    if (p1.length < 8) {
+        setMessage({ type: 'error', text: "Password must be atleast 8 caracters long." });
         setLoading(false);
         return;
     }
@@ -103,11 +103,11 @@ export default function AuthPage() {
     const res = await activateAccountAction(formData);
 
     if (res.success) {
-      setMessage({ type: 'success', text: "Compte créé avec succès ! Vérifiez vos emails pour confirmer votre adresse." });
+      setMessage({ type: 'success', text: "Account successfully created ! Check your email to confirm." });
       setMode('LOGIN'); 
       // On vide le formulaire si besoin, ou on laisse l'user aller sur login
     } else {
-      setMessage({ type: 'error', text: res.message || "Erreur lors de l'activation." });
+      setMessage({ type: 'error', text: res.message || "Error while activating the account." });
     }
     setLoading(false);
   };
@@ -126,7 +126,7 @@ export default function AuthPage() {
     // On affiche toujours un succès pour éviter l'énumération d'utilisateurs
     setMessage({ 
         type: 'success', 
-        text: "Si cet email correspond à un compte, vous allez recevoir un lien de réinitialisation." 
+        text: "If this email is linked to an account, you will receive an email shortly." 
     });
     setLoading(false);
   };
@@ -145,8 +145,8 @@ export default function AuthPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                 </svg>
              </div>
-             <h1 className="text-2xl font-bold text-white mb-2 tracking-tight">Espace Locataire</h1>
-             <p className="text-gray-400 text-sm">Bienvenue sur votre portail de gestion</p>
+             <h1 className="text-2xl font-bold text-white mb-2 tracking-tight">Tenant space</h1>
+             <p className="text-gray-400 text-sm">Welcome on your profile</p>
            </div>
            
            {/* Barre d'onglets */}
@@ -203,9 +203,9 @@ export default function AuthPage() {
               </div>
               <div className="space-y-1.5">
                 <div className="flex justify-between items-center ml-1">
-                    <label className="block text-sm font-bold text-gray-700">Mot de passe</label>
+                    <label className="block text-sm font-bold text-gray-700">Password</label>
                     <button type="button" onClick={() => setMode('FORGOT')} className="text-xs font-semibold text-blue-600 hover:text-blue-800 hover:underline">
-                      Mot de passe oublié ?
+                      Forgot Password ?
                     </button>
                 </div>
                 <input 
@@ -232,8 +232,8 @@ export default function AuthPage() {
               <div className="p-4 bg-blue-50 border border-blue-100 rounded-xl text-sm text-blue-800 flex gap-3">
                 <span className="text-xl">📬</span>
                 <div>
-                  <p className="font-bold mb-1">Activer votre compte</p>
-                  <p className="opacity-90">Utilisez les identifiants présents sur le courrier que vous avez reçu.</p>
+                  <p className="font-bold mb-1">Activate your account</p>
+                  <p className="opacity-90">Use the login details provided in the email you received.</p>
                 </div>
               </div>
 
@@ -250,21 +250,21 @@ export default function AuthPage() {
 
               <div className="relative py-2">
                 <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-gray-200"></div></div>
-                <div className="relative flex justify-center"><span className="bg-white px-4 text-xs text-gray-400 font-medium uppercase">Vos identifiants</span></div>
+                <div className="relative flex justify-center"><span className="bg-white px-4 text-xs text-gray-400 font-medium uppercase">Your login details</span></div>
               </div>
 
               <div className="space-y-1.5">
-                <label className="block text-sm font-bold text-gray-700 ml-1">Votre Email</label>
+                <label className="block text-sm font-bold text-gray-700 ml-1">Your Email</label>
                 <input name="email" type="email" required placeholder="nom@exemple.com" className="w-full px-4 py-3 rounded-xl border border-gray-300 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                    <label className="block text-sm font-bold text-gray-700 ml-1">Mot de passe</label>
+                    <label className="block text-sm font-bold text-gray-700 ml-1">Password</label>
                     <input name="password" type="password" required minLength={6} placeholder="Min. 6 car." className="w-full px-4 py-3 rounded-xl border border-gray-300 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
                 </div>
                 <div className="space-y-1.5">
-                    <label className="block text-sm font-bold text-gray-700 ml-1">Confirmation</label>
+                    <label className="block text-sm font-bold text-gray-700 ml-1">Confirm Password</label>
                     <input name="confirmPassword" type="password" required minLength={6} placeholder="Répéter" className="w-full px-4 py-3 rounded-xl border border-gray-300 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
                 </div>
               </div>
@@ -273,7 +273,7 @@ export default function AuthPage() {
                 disabled={loading} 
                 className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold shadow-lg hover:bg-blue-700 hover:shadow-xl focus:ring-4 focus:ring-blue-200 transition-all active:scale-[0.98] disabled:opacity-70"
               >
-                {loading ? 'Activation en cours...' : 'Activer mon accès'}
+                {loading ? 'Activating...' : 'Activate my access'}
               </button>
             </form>
           )}
@@ -286,7 +286,7 @@ export default function AuthPage() {
                     className="mb-6 flex items-center text-sm font-bold text-gray-500 hover:text-gray-900 transition-colors group"
                 >
                     <span className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center mr-2 group-hover:bg-gray-200 transition-colors">←</span>
-                    Retour à la connexion
+                    Back to login
                 </button>
                 
                 <div className="text-center mb-6">
@@ -295,17 +295,17 @@ export default function AuthPage() {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 14l-1 1-1 1H6v-1l4-4 1-1" />
                         </svg>
                     </div>
-                    <h3 className="text-lg font-bold text-gray-900">Réinitialisation</h3>
-                    <p className="text-sm text-gray-500 mt-1">Entrez votre email pour recevoir un lien magique.</p>
+                    <h3 className="text-lg font-bold text-gray-900">Reset</h3>
+                    <p className="text-sm text-gray-500 mt-1">Enter your email address to receive a magic link.</p>
                 </div>
 
                 <form onSubmit={handleForgot} className="space-y-5">
                     <div className="space-y-1.5">
-                        <label className="block text-sm font-bold text-gray-700 ml-1">Email associé au compte</label>
+                        <label className="block text-sm font-bold text-gray-700 ml-1">Email associated with the account</label>
                         <input name="email" type="email" required className="w-full px-4 py-3 rounded-xl border border-gray-300 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-gray-900 outline-none transition-all" />
                     </div>
                     <button disabled={loading} className="w-full bg-gray-900 text-white py-3.5 rounded-xl font-bold shadow-lg hover:bg-gray-800 disabled:opacity-70 transition-all">
-                        {loading ? 'Envoi...' : 'Envoyer le lien de récupération'}
+                        {loading ? 'Sending...' : 'Send the recovery link'}
                     </button>
                 </form>
             </div>
@@ -315,7 +315,7 @@ export default function AuthPage() {
         
         {/* Footer */}
         <div className="bg-gray-50 px-8 py-4 border-t border-gray-100 text-center">
-            <p className="text-xs text-gray-400">© 2025 Système de Gestion Immobilière</p>
+            <p className="text-xs text-gray-400">© 2025 Redefine Asset & Property Management</p>
         </div>
       </div>
     </main>
