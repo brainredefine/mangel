@@ -8,7 +8,7 @@ export default function ResetPasswordPage() {
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [msg, setMsg] = useState<{ type: 'error' | 'success' | 'info', text: string } | null>({
-        type: 'info', text: 'Validation du lien sécurisé...'
+        type: 'info', text: 'Validating secured link...'
     });
     const [isSessionReady, setIsSessionReady] = useState(false);
     const router = useRouter();
@@ -71,7 +71,7 @@ export default function ResetPasswordPage() {
                 const { data: { session: finalSession } } = await supabase.auth.getSession();
                 
                 if (!finalSession) {
-                    setMsg({ type: 'error', text: "Lien invalide ou expiré." });
+                    setMsg({ type: 'error', text: "Link expired." });
                     // On laisse le message d'erreur visible 3 secondes avant de rediriger
                     setTimeout(() => router.replace('/auth'), 3000);
                 }
@@ -95,7 +95,7 @@ export default function ResetPasswordPage() {
             setMsg({ type: 'error', text: "Erreur : " + error.message });
             setLoading(false);
         } else {
-            setMsg({ type: 'success', text: "Mot de passe modifié ! Redirection..." });
+            setMsg({ type: 'success', text: "Password updated ! Redirecting..." });
             await supabase.auth.signOut();
             setTimeout(() => {
                 router.replace('/auth');
@@ -117,7 +117,7 @@ export default function ResetPasswordPage() {
                     ) : (
                         <>
                             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mx-auto mb-4"></div>
-                            <p className="text-sm text-gray-500">{msg?.text || "Chargement..."}</p>
+                            <p className="text-sm text-gray-500">{msg?.text || "Loading..."}</p>
                         </>
                     )}
                 </div>
@@ -128,11 +128,11 @@ export default function ResetPasswordPage() {
     return (
         <main className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
             <div className="w-full max-w-md bg-white p-8 rounded-xl shadow-lg border border-gray-100 animate-in fade-in zoom-in duration-300">
-                <h1 className="text-xl font-bold text-gray-900 text-center mb-6">Nouveau mot de passe</h1>
+                <h1 className="text-xl font-bold text-gray-900 text-center mb-6">New password</h1>
                 
                 <form onSubmit={handleUpdate} className="space-y-4">
                     <div>
-                        <label className="block text-sm font-bold text-gray-700 mb-1">Mot de passe</label>
+                        <label className="block text-sm font-bold text-gray-700 mb-1">Password</label>
                         <input 
                             type="password" 
                             placeholder="••••••••"
@@ -151,7 +151,7 @@ export default function ResetPasswordPage() {
                     )}
 
                     <button disabled={loading} className="w-full bg-gray-900 text-white py-3.5 rounded-xl font-bold hover:bg-gray-800 disabled:opacity-50 transition-all shadow-lg">
-                        {loading ? 'Enregistrement...' : 'Confirmer'}
+                        {loading ? 'Saving...' : 'Confirm'}
                     </button>
                 </form>
             </div>
