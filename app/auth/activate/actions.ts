@@ -1,3 +1,5 @@
+// /app/auth/activate/actions.ts
+
 'use server';
 
 import { supabaseAdmin } from '../../../lib/supabaseAdmin';

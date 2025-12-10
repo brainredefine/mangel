@@ -49,11 +49,11 @@ type TicketWithMeta = Ticket & {
   tgm_mail?: string | null;
   tgm_phone?: string | null;
   odoo_vendor_id?: number | null;
-  angebotsumme?: number | null; // Angebotsumme (vendor quote)
-  beauftragungsumme?: number | null; // Beauftragungsumme (our commitment)
-  rechnungsumme?: number | null; // Rechnungsumme (final invoice)
+  angebotsumme?: number | null;
+  beauftragungsumme?: number | null;
+  rechnungsumme?: number | null;
   
-  // ✅ Nouveaux champs pour la logique Luxembourg
+  // Champs Luxembourg
   over_5k?: boolean;
   lux_approved?: boolean;
 };
@@ -187,7 +187,7 @@ export default function TicketDetailPage() {
   const [savingBeauftragt, setSavingBeauftragt] = useState(false);
   const [savingRechnung, setSavingRechnung] = useState(false);
 
-  // Upload attachment admin
+  // Upload attachment logic
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const [attachmentUploadError, setAttachmentUploadError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -249,23 +249,13 @@ export default function TicketDetailPage() {
 
       const t = ticketData as TicketWithMeta;
 
-      // --- 4. VÉRIFICATION SÉCURITÉ (CORRIGÉE) ---
+      // --- 4. VÉRIFICATION SÉCURITÉ ---
       if (!isCurrentUserAdmin) {
-        // On convertit tout en String pour éviter le problème int8 vs text
         const ticketTenantId = t.tenant_id ? String(t.tenant_id) : null;
         const userTenantId = profileData.tenant_id ? String(profileData.tenant_id) : null;
 
         const isSameTenant = ticketTenantId && userTenantId && (ticketTenantId === userTenantId);
         const isCreator = t.created_by === user.id;
-
-        // DEBUG : Tu pourras supprimer ces logs une fois que ça marche
-        console.log('🔐 SECURITY CHECK:', {
-          ticketId: t.id,
-          role: profileData.role,
-          ticketTenant: ticketTenantId,
-          userTenant: userTenantId,
-          match: isSameTenant
-        });
 
         if (!isSameTenant && !isCreator) {
           setErrorMsg('Sie haben keinen Zugriff auf dieses Ticket.');
@@ -558,7 +548,8 @@ export default function TicketDetailPage() {
           file_path: path,
           original_name: file.name,
           mime_type: file.type || 'application/octet-stream',
-          privacy: 'private',
+          // ✅ Admin = private par défaut, Tenant = public
+          privacy: isAdminAm ? 'private' : 'public',
         })
         .select()
         .single();
@@ -574,7 +565,7 @@ export default function TicketDetailPage() {
 
       setAttachments((prev) => [...prev, newAtt]);
     } catch (err) {
-      console.error('Admin upload attachment error', err);
+      console.error('Upload attachment error', err);
       setAttachmentUploadError('Upload fehlgeschlagen.');
     } finally {
       setUploadingAttachment(false);
@@ -730,8 +721,6 @@ export default function TicketDetailPage() {
     if (!error) setTicket((prev) => (prev ? { ...prev, status: 'open', closed_reason: null } : prev));
     setUpdatingAction(null);
   };
-
-  // ✅ Suppression de handleCloseOver5000 et ajout de la logique >5k Luxembourg
 
   const handleToggleOver5k = async () => {
     if (!ticket) return;
@@ -1066,7 +1055,10 @@ export default function TicketDetailPage() {
         <div className="bg-white rounded-xl shadow-sm p-8 border border-gray-200">
           <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 mb-6 border-b border-gray-100 pb-6">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900 mb-2">{ticket.title}</h1>
+              {/* ✅ TITRE TRONQUÉ */}
+              <h1 className="text-3xl font-bold text-gray-900 mb-2" title={ticket.title}>
+                {ticket.title.length > 100 ? `${ticket.title.slice(0, 100)}...` : ticket.title}
+              </h1>
               <div className="text-sm text-gray-500 flex flex-wrap items-center gap-3">
                 <span>Erstellt am {formatDate(ticket.created_at)}</span>
                 <span>•</span>
@@ -1107,8 +1099,8 @@ export default function TicketDetailPage() {
             </div>
           )}
 
-          {/* ✅ BLOC ALERTE LUXEMBOURG (visible si >5k) */}
-          {ticket.over_5k && (
+          {/* ✅ BLOC ALERTE LUXEMBOURG (visible si >5k ET ADMIN) */}
+          {isAdminAm && ticket.over_5k && (
             <div className={`mt-6 border-l-4 p-4 rounded-r-md flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors ${
               ticket.lux_approved 
                 ? 'bg-green-50 border-green-500 text-green-800' 
@@ -1928,46 +1920,50 @@ export default function TicketDetailPage() {
               <span>Anhänge</span>
             </h2>
 
-            {/* Upload admin Drag & Drop */}
-            {isAdminAm && (
-              <div className="mb-4">
-                <div
-                  onDragOver={handleDragOver}
-                  onDragLeave={handleDragLeave}
-                  onDrop={handleDrop}
-                  className={`border border-dashed rounded-lg p-4 flex flex-col items-center justify-center gap-2 transition-all duration-200 ${
-                    isDragging
-                      ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200 ring-offset-1'
-                      : 'border-gray-300 bg-gray-50 hover:bg-gray-100'
-                  }`}
-                >
-                  <div className="text-center">
-                    <div className="text-sm font-medium text-gray-700">
-                      {isDragging ? <span className="text-blue-700">Datei hier ablegen!</span> : <span>Interne Datei hinzufügen (privat)</span>}
-                    </div>
-                    {!isDragging && (
-                      <div className="text-[11px] text-gray-500 mt-1">
-                        Drag & Drop oder Button nutzen. Gespeichert als <code>private</code>.
-                      </div>
+            {/* ✅ MODIFICATION : Upload activé pour TOUS, mais affichage texte dynamique */}
+            <div className="mb-4">
+              <div
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                className={`border border-dashed rounded-lg p-4 flex flex-col items-center justify-center gap-2 transition-all duration-200 ${
+                  isDragging
+                    ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200 ring-offset-1'
+                    : 'border-gray-300 bg-gray-50 hover:bg-gray-100'
+                }`}
+              >
+                <div className="text-center">
+                  <div className="text-sm font-medium text-gray-700">
+                    {isDragging ? (
+                      <span className="text-blue-700">Datei hier ablegen!</span>
+                    ) : (
+                      <span>{isAdminAm ? 'Interne Datei hinzufügen (privat)' : 'Datei / Foto hinzufügen'}</span>
                     )}
                   </div>
-
-                  <label className="inline-flex items-center px-4 py-2 text-xs font-medium rounded-lg bg-gray-900 text-white hover:bg-gray-800 cursor-pointer shadow-sm transition mt-1">
-                    {uploadingAttachment ? (
-                      <span className="flex items-center gap-2">
-                        <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                        Upload läuft...
-                      </span>
-                    ) : (
-                      'Datei auswählen'
-                    )}
-                    <input type="file" className="hidden" onChange={handleAdminFileInputChange} disabled={uploadingAttachment} />
-                  </label>
+                  {!isDragging && (
+                    <div className="text-[11px] text-gray-500 mt-1">
+                      {isAdminAm 
+                        ? 'Drag & Drop oder Button nutzen. Gespeichert als private.' 
+                        : 'Laden Sie Fotos oder Dokumente hoch.'}
+                    </div>
+                  )}
                 </div>
 
-                {attachmentUploadError && <p className="mt-2 text-xs text-red-600 text-center">{attachmentUploadError}</p>}
+                <label className="inline-flex items-center px-4 py-2 text-xs font-medium rounded-lg bg-gray-900 text-white hover:bg-gray-800 cursor-pointer shadow-sm transition mt-1">
+                  {uploadingAttachment ? (
+                    <span className="flex items-center gap-2">
+                      <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                      Upload läuft...
+                    </span>
+                  ) : (
+                    'Datei auswählen'
+                  )}
+                  <input type="file" className="hidden" onChange={handleAdminFileInputChange} disabled={uploadingAttachment} />
+                </label>
               </div>
-            )}
+
+              {attachmentUploadError && <p className="mt-2 text-xs text-red-600 text-center">{attachmentUploadError}</p>}
+            </div>
 
             <div className="flex-1 overflow-y-auto space-y-2 pr-1">
               {attachments.length === 0 ? (

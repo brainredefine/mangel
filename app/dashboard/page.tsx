@@ -25,7 +25,7 @@ export default function DashboardPage() {
       const { data: { user } } = await supabase.auth.getUser();
 
       if (!user) {
-        router.push('/sign-in');
+        router.push('/auth');
         return;
       }
 
@@ -51,7 +51,7 @@ export default function DashboardPage() {
     setIsLoggingOut(true);
     await supabase.auth.signOut();
     router.refresh();
-    router.push('/sign-in');
+    router.push('/auth');
   };
 
   const isAdminAm = profile?.role === 'admin_am';

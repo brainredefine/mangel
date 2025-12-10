@@ -206,7 +206,7 @@ export default function BackofficeTicketsPage() {
                     <th className="px-6 py-4 w-48">Mieter</th>
                     <th className="px-6 py-4">Ticket</th>
                     <th className="px-6 py-4 w-32">Priorität</th>
-                    <th className="px-6 py-4 w-44">Verantwortlich (PM)</th> {/* Un peu plus large */}
+                    <th className="px-6 py-4 w-44">Verantwortlich (PM)</th>
                     <th className="px-6 py-4 w-32 text-right">Kosten</th>
                     <th className="px-6 py-4 w-32 text-center">Status</th>
                     <th className="px-6 py-4 w-10"></th>
@@ -233,9 +233,16 @@ export default function BackofficeTicketsPage() {
                       </td>
 
                       <td className="px-6 py-4 align-top">
-                        <div className="font-semibold text-gray-900 text-base mb-1 group-hover:text-blue-600 transition-colors">
-                          {t.title}
+                        {/* ✅ MODIFICATION ICI : Tronquer le titre à 80 caractères */}
+                        <div 
+                          className="font-semibold text-gray-900 text-base mb-1 group-hover:text-blue-600 transition-colors"
+                          title={t.title} // Affiche le titre complet au survol
+                        >
+                          {t.title.length > 80 
+                            ? `${t.title.slice(0, 80)}...` 
+                            : t.title}
                         </div>
+
                         {t.description && (
                           <div className="text-gray-500 text-xs line-clamp-1 max-w-md">
                             {t.description}
@@ -247,11 +254,9 @@ export default function BackofficeTicketsPage() {
                         {getPriorityLabel(t.priority)}
                       </td>
 
-                      {/* --- COLONNE PM (MODIFIÉE) --- */}
                       <td className="px-6 py-4 align-top">
                         {t.pm ? (
                             <div className="flex flex-col items-start gap-1">
-                                {/* Le PM actuel */}
                                 <div className="flex items-center gap-2">
                                     <div className="w-6 h-6 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center text-xs font-bold">
                                         {t.pm.charAt(0)}
@@ -261,7 +266,6 @@ export default function BackofficeTicketsPage() {
                                     </span>
                                 </div>
                                 
-                                {/* Bouton OVERRIDE visible en bleu */}
                                 {t.pm !== profile?.full_name && (
                                     <button
                                         onClick={(e) => handleClaim(e, t.id)}
