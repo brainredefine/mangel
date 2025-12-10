@@ -828,3 +828,144 @@ export async function fetchTenanciesNamesByIds(ids: (number | string)[]) {
       });
   });
 }
+
+/**
+ * ✅ Admin: récupère toutes les tenancies + enrichissement property.property
+ * + BRIDGE vers res.partner via property.tenancy.partner_id
+ */
+export async function fetchAllTenanciesFromOdoo(options?: {
+  limit?: number;
+}): Promise<any[]> {
+  const limit = options?.limit ?? 5000;
+
+  return new Promise<any[]>((resolve, reject) => {
+    const { client, common } = createOdooClient();
+
+    common.methodCall(
+      'authenticate',
+      [ODOO_CONFIG.db, ODOO_CONFIG.username, ODOO_CONFIG.password, {}],
+      (authErr: any, uid: any) => {
+        if (authErr) return reject(authErr);
+
+        const domain: any[] = []; // => toutes les tenancies
+
+        client.methodCall(
+          'execute_kw',
+          [
+            ODOO_CONFIG.db,
+            uid,
+            ODOO_CONFIG.password,
+            TENANCY_MODEL,
+            'search_read',
+            [domain],
+            {
+              // ✅ partner_id ajouté ici
+              fields: ['id', 'name', 'display_name', 'main_property_id', 'partner_id'],
+              limit,
+              context: { active_test: false },
+            },
+          ],
+          (searchErr: any, results: any[]) => {
+            if (searchErr) return reject(searchErr);
+            if (!results || results.length === 0) return resolve([]);
+
+            // Collecte des property IDs via main_property_id
+            const propIds = Array.from(
+              new Set(
+                results
+                  .map((t: any) => {
+                    const mp = t.main_property_id;
+                    return Array.isArray(mp) ? mp[0] : mp;
+                  })
+                  .filter(Boolean)
+              )
+            );
+
+            if (propIds.length === 0) {
+              // Même sans property, on renvoie déjà partner_id formaté
+              const minimal = results.map((t: any) => {
+                const partner = t.partner_id;
+                const tenant_partner_id = Array.isArray(partner) ? partner[0] : null;
+                const tenant_partner_name = Array.isArray(partner) ? partner[1] : null;
+
+                return {
+                  ...t,
+                  tenant_partner_id,
+                  tenant_partner_name,
+                  asset_id: null,
+                  property_street: '',
+                  property_zip: '',
+                  property_city: '',
+                  property_company: '',
+                  property_entity_id: null,
+                  property_entity_name: null,
+                };
+              });
+              return resolve(minimal);
+            }
+
+            // Lire les properties associées
+            client.methodCall(
+              'execute_kw',
+              [
+                ODOO_CONFIG.db,
+                uid,
+                ODOO_CONFIG.password,
+                PROPERTY_MODEL,
+                'search_read',
+                [[['id', 'in', propIds]]],
+                {
+                  fields: ['id', 'street', 'zip', 'city', 'company_id', 'entity_id'],
+                  limit: propIds.length,
+                  context: { active_test: false },
+                },
+              ],
+              (propErr: any, props: any[]) => {
+                if (propErr) return reject(propErr);
+
+                const propMap: Record<number, any> = {};
+                (props || []).forEach((p: any) => {
+                  propMap[p.id] = p;
+                });
+
+                const enriched = results.map((t: any) => {
+                  const mp = t.main_property_id;
+                  const pid = Array.isArray(mp) ? mp[0] : mp;
+                  const p = pid ? propMap[pid] || {} : {};
+
+                  const companyName =
+                    p.company_id && Array.isArray(p.company_id) ? p.company_id[1] || '' : '';
+
+                  const entityId =
+                    p.entity_id && Array.isArray(p.entity_id) ? (p.entity_id[0] as number) : null;
+
+                  const entityName =
+                    p.entity_id && Array.isArray(p.entity_id) ? (p.entity_id[1] as string) : null;
+
+                  const partner = t.partner_id;
+                  const tenant_partner_id = Array.isArray(partner) ? partner[0] : null;
+                  const tenant_partner_name = Array.isArray(partner) ? partner[1] : null;
+
+                  return {
+                    ...t,
+                    asset_id: pid ?? null, // property.property.id
+                    property_street: p.street || '',
+                    property_zip: p.zip || '',
+                    property_city: p.city || '',
+                    property_company: companyName,
+                    property_entity_id: entityId,
+                    property_entity_name: entityName,
+                    tenant_partner_id,
+                    tenant_partner_name,
+                  };
+                });
+
+                resolve(enriched);
+              }
+            );
+          }
+        );
+      }
+    );
+  });
+}

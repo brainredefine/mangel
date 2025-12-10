@@ -159,6 +159,27 @@ export default function DashboardPage() {
             </Link>
           )}
 
+          {/* Carte 4 : Nouveau Ticket pour un tenant (Visible seulement si Admin) */}
+          {isAdminAm && (
+            <Link
+              href="/tickets/new-admin"
+              className="group block bg-white rounded-xl shadow-sm border border-gray-200 p-8 hover:shadow-md hover:border-gray-300 transition-all duration-200"
+            >
+              <div className="w-12 h-12 bg-emerald-50 text-emerald-700 rounded-lg flex items-center justify-center mb-5 text-2xl group-hover:bg-emerald-100 transition">
+                🧑‍💼
+              </div>
+              <h2 className="text-xl font-semibold text-gray-900 mb-2">
+                Ticket für Mieter erstellen
+              </h2>
+              <p className="text-sm text-gray-600 mb-6 leading-relaxed">
+                Ticket im Namen eines Tenants erstellen (falls der Tenant es nicht macht).
+              </p>
+              <div className="flex items-center text-sm font-medium text-emerald-700 group-hover:underline underline-offset-4">
+                Erstellen <span className="ml-1 transition-transform group-hover:translate-x-1">&rarr;</span>
+              </div>
+            </Link>
+          )}
+
         </div>
 
         {/* Footer */}
