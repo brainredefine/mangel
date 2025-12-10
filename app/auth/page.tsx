@@ -1,18 +1,19 @@
 // app/auth/page.tsx
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react'; // <--- AJOUT SUSPENSE
 import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { activateAccountAction, forgotPasswordAction } from './actions';
 
 type AuthMode = 'LOGIN' | 'ACTIVATE' | 'FORGOT';
 
-export default function AuthPage() {
+// --- 1. SOUS-COMPOSANT : CONTIENT TOUTE LA LOGIQUE ET LE CONTENU ---
+function AuthFormContent() {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams(); // <--- Fonctionne ici car enveloppé par Suspense plus bas
   
-  // Gestion de l'état initial via les paramètres d'URL (?view=activate ou ?error=...)
+  // Gestion de l'état initial via les paramètres d'URL
   const initialMode = (searchParams.get('view') === 'activate') ? 'ACTIVATE' : 'LOGIN';
   const errorParam = searchParams.get('error');
 
@@ -22,7 +23,7 @@ export default function AuthPage() {
     errorParam ? { type: 'error', text: 'An error occured.' } : null
   );
 
-// --- 1. GESTION CRITIQUE DU MOT DE PASSE OUBLIÉ ---
+  // --- GESTION CRITIQUE DU MOT DE PASSE OUBLIÉ ---
   useEffect(() => {
     const hash = window.location.hash;
     
@@ -32,11 +33,9 @@ export default function AuthPage() {
       setMessage({ type: 'success', text: 'Token detected. Redirecting...' });
       
       // ASTUCE CRUCIALE : On redirige EN GARDANT LE HASH
-      // Ainsi la page suivante pourra lire le token et créer la session
       setTimeout(() => {
-        // On concatène le hash actuel à la nouvelle URL
         router.replace('/auth/reset-password' + hash); 
-      }, 500); // 500ms suffisent largement maintenant
+      }, 500); 
 
       return;
     }
@@ -45,15 +44,15 @@ export default function AuthPage() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'PASSWORD_RECOVERY') {
         setLoading(true);
-        router.replace('/auth/reset-password');
+        // Fallback redirection avec hash
+        router.replace('/auth/reset-password' + window.location.hash);
       }
     });
 
     return () => subscription.unsubscribe();
   }, [router]);
 
-
-  // --- 2. HANDLERS DU FORMULAIRE ---
+  // --- HANDLERS ---
 
   // -> CONNEXION
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -71,20 +70,18 @@ export default function AuthPage() {
       setMessage({ type: 'error', text: "Incorrect email or password." });
       setLoading(false);
     } else {
-      // Le middleware gère la protection, mais on force la redirection pour l'UX
       router.refresh();
       router.push('/dashboard');
     }
   };
 
-  // -> ACTIVATION DE COMPTE (AVEC CODE ODOO)
+  // -> ACTIVATION
   const handleActivate = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLoading(true);
     setMessage(null);
     const formData = new FormData(e.currentTarget);
     
-    // Vérif mot de passe local
     const p1 = formData.get('password') as string;
     const p2 = formData.get('confirmPassword') as string;
     
@@ -99,13 +96,11 @@ export default function AuthPage() {
         return;
     }
 
-    // Appel Server Action
     const res = await activateAccountAction(formData);
 
     if (res.success) {
       setMessage({ type: 'success', text: "Account successfully created ! Check your email to confirm." });
       setMode('LOGIN'); 
-      // On vide le formulaire si besoin, ou on laisse l'user aller sur login
     } else {
       setMessage({ type: 'error', text: res.message || "Error while activating the account." });
     }
@@ -120,10 +115,8 @@ export default function AuthPage() {
     const formData = new FormData(e.currentTarget);
     const email = formData.get('email') as string;
 
-    // Appel Server Action
     const res = await forgotPasswordAction(email);
     
-    // On affiche toujours un succès pour éviter l'énumération d'utilisateurs
     setMessage({ 
         type: 'success', 
         text: "If this email is linked to an account, you will receive an email shortly." 
@@ -131,10 +124,8 @@ export default function AuthPage() {
     setLoading(false);
   };
 
-
-  // --- 3. RENDU VISUEL ---
+  // --- RENDU DU FORMULAIRE ---
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gray-50 p-4 font-sans">
       <div className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">
         
         {/* EN-TÊTE AVEC ONGLETS */}
@@ -149,7 +140,6 @@ export default function AuthPage() {
              <p className="text-gray-400 text-sm">Welcome on your profile</p>
            </div>
            
-           {/* Barre d'onglets */}
            <div className="flex w-full bg-gray-800/50 backdrop-blur-sm">
              <button 
                onClick={() => { setMode('LOGIN'); setMessage(null); }}
@@ -176,7 +166,6 @@ export default function AuthPage() {
 
         <div className="p-8">
           
-          {/* ZONE DE NOTIFICATION */}
           {message && (
             <div className={`mb-6 p-4 rounded-xl text-sm font-medium flex items-start gap-3 animate-in fade-in slide-in-from-top-2 ${
                 message.type === 'error' 
@@ -188,7 +177,7 @@ export default function AuthPage() {
             </div>
           )}
 
-          {/* --- FORMULAIRE : LOGIN --- */}
+          {/* LOGIN */}
           {mode === 'LOGIN' && (
             <form onSubmit={handleLogin} className="space-y-5 animate-in fade-in slide-in-from-left-4 duration-300">
               <div className="space-y-1.5">
@@ -225,7 +214,7 @@ export default function AuthPage() {
             </form>
           )}
 
-          {/* --- FORMULAIRE : ACTIVATE --- */}
+          {/* ACTIVATE */}
           {mode === 'ACTIVATE' && (
             <form onSubmit={handleActivate} className="space-y-5 animate-in fade-in slide-in-from-right-4 duration-300">
               
@@ -278,7 +267,7 @@ export default function AuthPage() {
             </form>
           )}
 
-          {/* --- FORMULAIRE : FORGOT PASSWORD --- */}
+          {/* FORGOT */}
           {mode === 'FORGOT' && (
             <div className="animate-in fade-in zoom-in duration-300">
                 <button 
@@ -318,6 +307,20 @@ export default function AuthPage() {
             <p className="text-xs text-gray-400">© 2025 Redefine Asset & Property Management</p>
         </div>
       </div>
+  );
+}
+
+// --- 2. WRAPPER PRINCIPAL POUR CORRIGER L'ERREUR DE BUILD ---
+export default function AuthPage() {
+  return (
+    <main className="min-h-screen flex items-center justify-center bg-gray-50 p-4 font-sans">
+      <Suspense fallback={
+        <div className="w-full max-w-md bg-white rounded-2xl shadow-xl h-[600px] flex items-center justify-center border border-gray-100">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+        </div>
+      }>
+        <AuthFormContent />
+      </Suspense>
     </main>
   );
 }
