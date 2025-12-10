@@ -149,7 +149,7 @@ function AuthFormContent() {
                   : 'border-transparent text-gray-400 hover:text-white hover:bg-white/5'
                }`}
              >
-               Connexion
+               Login
              </button>
              <button 
                onClick={() => { setMode('ACTIVATE'); setMessage(null); }}
@@ -159,7 +159,7 @@ function AuthFormContent() {
                   : 'border-transparent text-gray-400 hover:text-white hover:bg-white/5'
                }`}
              >
-               Première visite ?
+               First login ?
              </button>
            </div>
         </div>
@@ -209,7 +209,7 @@ function AuthFormContent() {
                 disabled={loading} 
                 className="w-full bg-gray-900 text-white py-3.5 rounded-xl font-bold shadow-lg hover:bg-gray-800 hover:shadow-xl focus:ring-4 focus:ring-gray-200 transition-all active:scale-[0.98] disabled:opacity-70 disabled:cursor-wait"
               >
-                {loading ? 'Connexion en cours...' : 'Se connecter'}
+                {loading ? 'Logging in...' : 'Login in'}
               </button>
             </form>
           )}
@@ -244,17 +244,17 @@ function AuthFormContent() {
 
               <div className="space-y-1.5">
                 <label className="block text-sm font-bold text-gray-700 ml-1">Your Email</label>
-                <input name="email" type="email" required placeholder="nom@exemple.com" className="w-full px-4 py-3 rounded-xl border border-gray-300 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+                <input name="email" type="email" required placeholder="name@example.com" className="w-full px-4 py-3 rounded-xl border border-gray-300 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                     <label className="block text-sm font-bold text-gray-700 ml-1">Password</label>
-                    <input name="password" type="password" required minLength={6} placeholder="Min. 6 car." className="w-full px-4 py-3 rounded-xl border border-gray-300 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+                    <input name="password" type="password" required minLength={6} placeholder="Min. 8 car." className="w-full px-4 py-3 rounded-xl border border-gray-300 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
                 </div>
                 <div className="space-y-1.5">
                     <label className="block text-sm font-bold text-gray-700 ml-1">Confirm Password</label>
-                    <input name="confirmPassword" type="password" required minLength={6} placeholder="Répéter" className="w-full px-4 py-3 rounded-xl border border-gray-300 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+                    <input name="confirmPassword" type="password" required minLength={6} placeholder="Repeat" className="w-full px-4 py-3 rounded-xl border border-gray-300 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
                 </div>
               </div>
 
