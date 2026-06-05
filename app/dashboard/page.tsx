@@ -1,14 +1,20 @@
+// /app/dashboard/page.tsx
+
 'use client';
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabaseClient';
+import { MyProfileCard } from './components/MyProfileCard';
+import { StatsOverview } from './components/StatsOverview';
+import { Spinner } from '@/components/ui';
 
 type Profile = {
   id: string;
-  role: string; // 'tenant_user' | 'admin_am'
+  role: string;
   full_name?: string;
+  odoo_id?: number | null;
 };
 
 export default function DashboardPage() {
@@ -23,7 +29,6 @@ export default function DashboardPage() {
     const loadProfile = async () => {
       setLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
-
       if (!user) {
         router.push('/auth');
         return;
@@ -31,7 +36,7 @@ export default function DashboardPage() {
 
       const { data, error } = await supabase
         .from('profiles')
-        .select('id, role, full_name')
+        .select('id, role, full_name, odoo_id')
         .eq('id', user.id)
         .single();
 
@@ -56,135 +61,125 @@ export default function DashboardPage() {
 
   const isAdminAm = profile?.role === 'admin_am';
 
-  // --- RENDER ---
+  // --- RENDER: Loading ---
   if (loading) {
     return (
-      <main className="min-h-screen w-full bg-gray-100 flex items-center justify-center">
-        <div className="w-8 h-8 border-4 border-gray-300 border-t-black rounded-full animate-spin" />
+      <main className="flex min-h-screen w-full items-center justify-center bg-zinc-50">
+        <Spinner className="h-8 w-8 text-zinc-400" />
       </main>
     );
   }
 
+  // --- RENDER: Main ---
   return (
-    <main className="min-h-screen w-full bg-gray-100 flex flex-col items-center p-6 text-gray-900 relative">
-      
-      {/* Header (Nom + Logout) 
-          CORRECTION ICI : ajout de 'relative z-10' pour que le header reste 
-          cliquable au-dessus du contenu qui a une marge négative. 
-      */}
-      <div className="w-full max-w-2xl flex justify-between items-center mb-8 md:mb-12 relative z-10">
-         <div className="text-sm font-medium text-gray-500">
-            {profile?.full_name ? `Hallo, ${profile.full_name}` : 'Willkommen'}
-         </div>
-         <button
+    <main className="flex min-h-screen w-full flex-col items-center bg-zinc-50 p-6 text-zinc-900">
+
+      {/* Header */}
+      <div className="mb-10 flex w-full max-w-5xl items-center justify-between">
+        <div className="text-sm text-zinc-500">
+          {profile?.full_name ? `Hallo, ${profile.full_name}` : 'Willkommen'}
+        </div>
+        <button
           onClick={handleLogout}
           disabled={isLoggingOut}
-          className="text-sm text-gray-500 hover:text-red-600 font-medium transition-colors px-3 py-2 rounded-lg hover:bg-gray-200 cursor-pointer"
+          className="inline-flex items-center gap-2 text-sm text-zinc-500 transition-colors hover:text-zinc-900 disabled:opacity-50"
         >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
+          </svg>
           {isLoggingOut ? '...' : 'Abmelden'}
         </button>
       </div>
 
-      <div className="w-full max-w-2xl space-y-8 flex-grow flex flex-col justify-center -mt-20 relative z-0">
-        
-        {/* Titres */}
-        <div className="text-center space-y-2">
-          <h1 className="text-3xl font-semibold text-gray-900">
-            Dashboard
-          </h1>
-          <p className="text-gray-600 text-lg">
-            Was möchten Sie tun?
+      {/* Content */}
+      <div className="flex w-full max-w-5xl flex-col pb-12">
+
+        {/* Title */}
+        <div className="mb-8">
+          <h1 className="text-2xl font-bold tracking-tight text-zinc-900">Dashboard</h1>
+          <p className="mt-1 text-sm text-zinc-500">
+            {isAdminAm ? 'Überblick über alle Tickets' : 'Was möchten Sie tun?'}
           </p>
         </div>
 
-        {/* Grille des actions */}
-        <div className="grid gap-6 md:grid-cols-2">
-          
-          {/* Carte 1 : Nouveau Ticket */}
-          <Link
-            href="/tickets/new"
-            className="group block bg-white rounded-xl shadow-sm border border-gray-200 p-8 hover:shadow-md hover:border-gray-300 transition-all duration-200"
-          >
-            <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center mb-5 text-2xl group-hover:bg-blue-100 transition">
-              📝
-            </div>
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">
-              Neues Ticket
-            </h2>
-            <p className="text-sm text-gray-600 mb-6 leading-relaxed">
-              Einen neuen Mangel melden. Fotos hochladen und Details angeben.
-            </p>
-            <div className="flex items-center text-sm font-medium text-blue-600 group-hover:underline underline-offset-4">
-              Erstellen <span className="ml-1 transition-transform group-hover:translate-x-1">&rarr;</span>
-            </div>
-          </Link>
+        {/* KPIs (Admin) */}
+        {isAdminAm && (
+          <div className="mb-10">
+            <StatsOverview />
+          </div>
+        )}
 
-          {/* Carte 2 : Mes Tickets */}
-          <Link
-            href="/tickets/existing"
-            className="group block bg-white rounded-xl shadow-sm border border-gray-200 p-8 hover:shadow-md hover:border-gray-300 transition-all duration-200"
-          >
-            <div className="w-12 h-12 bg-purple-50 text-purple-600 rounded-lg flex items-center justify-center mb-5 text-2xl group-hover:bg-purple-100 transition">
-              📂
-            </div>
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">
-              Meine Tickets
-            </h2>
-            <p className="text-sm text-gray-600 mb-6 leading-relaxed">
-              Status und Verlauf bestehender Meldungen einsehen.
-            </p>
-            <div className="flex items-center text-sm font-medium text-purple-600 group-hover:underline underline-offset-4">
-              Ansehen <span className="ml-1 transition-transform group-hover:translate-x-1">&rarr;</span>
-            </div>
-          </Link>
+        {/* Schnellzugriff */}
+        <h2 className="mb-4 text-xs font-bold uppercase tracking-wider text-zinc-400">
+          Schnellzugriff
+        </h2>
 
-          {/* Carte 3 : Backoffice (Visible seulement si Admin) */}
+        {/* Actions Grid */}
+        <div className="grid gap-4 md:grid-cols-2">
+
+          {/* Card: Backoffice (Admin only) - DARK */}
           {isAdminAm && (
             <Link
               href="/backoffice/tickets"
-              className="group block bg-white rounded-xl shadow-sm border border-gray-200 p-8 hover:shadow-md hover:border-gray-300 transition-all duration-200 md:col-span-2"
+              className="group block rounded-2xl bg-zinc-900 p-6 shadow-sm transition-all hover:bg-zinc-800"
             >
-              <div className="w-12 h-12 bg-gray-100 text-gray-700 rounded-lg flex items-center justify-center mb-5 text-2xl group-hover:bg-gray-200 transition">
-                ⚙️
+              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-white/10 text-white transition-colors group-hover:bg-indigo-500/20 group-hover:text-indigo-300">
+                <svg className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 11-3 0m3 0a1.5 1.5 0 10-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-9.75 0h9.75" />
+                </svg>
               </div>
-              <h2 className="text-xl font-semibold text-gray-900 mb-2">
+              <h2 className="mb-1 text-lg font-semibold text-white">
                 AM/PM Backoffice
               </h2>
-              <p className="text-sm text-gray-600 mb-6 leading-relaxed">
-                Tickets verwalten, Status ändern, externe Dienstleister suchen und beauftragen.
+              <p className="mb-4 text-sm leading-relaxed text-zinc-400">
+                Tickets verwalten, Status ändern, Dienstleister beauftragen.
               </p>
-              <div className="flex items-center text-sm font-medium text-gray-900 group-hover:underline underline-offset-4">
-                Öffnen <span className="ml-1 transition-transform group-hover:translate-x-1">&rarr;</span>
+              <div className="flex items-center gap-2 text-sm font-semibold text-indigo-400 transition-all group-hover:gap-3">
+                Öffnen
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 8.25L21 12m0 0l-3.75 3.75M21 12H3" />
+                </svg>
               </div>
             </Link>
           )}
 
-          {/* Carte 4 : Nouveau Ticket pour un tenant (Visible seulement si Admin) */}
+          {/* Card 4: Ticket für Mieter (Admin only) - DARK */}
           {isAdminAm && (
             <Link
               href="/tickets/new-admin"
-              className="group block bg-white rounded-xl shadow-sm border border-gray-200 p-8 hover:shadow-md hover:border-gray-300 transition-all duration-200"
+              className="group block rounded-2xl bg-zinc-900 p-6 shadow-sm transition-all hover:bg-zinc-800"
             >
-              <div className="w-12 h-12 bg-emerald-50 text-emerald-700 rounded-lg flex items-center justify-center mb-5 text-2xl group-hover:bg-emerald-100 transition">
-                🧑‍💼
+              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-white/10 text-white transition-colors group-hover:bg-indigo-500/20 group-hover:text-indigo-300">
+                <svg className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+                </svg>
               </div>
-              <h2 className="text-xl font-semibold text-gray-900 mb-2">
-                Ticket für Mieter erstellen
+              <h2 className="mb-1 text-lg font-semibold text-white">
+                Ticket für Mieter
               </h2>
-              <p className="text-sm text-gray-600 mb-6 leading-relaxed">
-                Ticket im Namen eines Tenants erstellen (falls der Tenant es nicht macht).
+              <p className="mb-4 text-sm leading-relaxed text-zinc-400">
+                Ticket im Namen eines Tenants erstellen.
               </p>
-              <div className="flex items-center text-sm font-medium text-emerald-700 group-hover:underline underline-offset-4">
-                Erstellen <span className="ml-1 transition-transform group-hover:translate-x-1">&rarr;</span>
+              <div className="flex items-center gap-2 text-sm font-semibold text-indigo-400 transition-all group-hover:gap-3">
+                Erstellen
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 8.25L21 12m0 0l-3.75 3.75M21 12H3" />
+                </svg>
               </div>
             </Link>
           )}
-
         </div>
 
+        {/* Profile Card - Anyone with odoo_id */}
+        {profile?.odoo_id && (
+          <div className="mt-8">
+            <MyProfileCard partnerId={profile.odoo_id} />
+          </div>
+        )}
+
         {/* Footer */}
-        <div className="text-center pt-8 border-t border-gray-200">
-          <p className="text-xs text-gray-400">
+        <div className="mt-12 border-t border-zinc-200 pt-6 text-center">
+          <p className="text-xs text-zinc-400">
             © Mangelmanagement System
           </p>
         </div>

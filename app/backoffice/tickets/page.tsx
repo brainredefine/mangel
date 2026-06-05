@@ -1,9 +1,21 @@
+// /app/backoffice/tickets/page.tsx
+
 'use client';
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabaseClient';
-import { getTenancyNamesAction } from './actions';
+import { getTenancyNamesAction, getPartnerNamesAction } from './actions';
+import { ageInDays, isOverdue, assetGroupFromRef } from '../../../lib/ticketMetrics';
+import {
+  Badge,
+  Button,
+  Card,
+  Spinner,
+  StatusBadge,
+  priorityMeta,
+  cn,
+} from '@/components/ui';
 
 // --- TYPES ---
 
@@ -13,25 +25,34 @@ type Profile = {
   full_name?: string;
 };
 
-type TicketStatus = 'new' | 'open' | 'in_progress' | 'closed';
-
 type Ticket = {
   id: string;
   title: string;
   description: string | null;
   priority: 'low' | 'medium' | 'high';
-  status: TicketStatus;
+  status: 'new' | 'open' | 'in_progress' | 'closed' | 'archived';
   created_at: string;
   tenant_id: string;
   cost_estimated: number | null;
   pm: string | null;
-  
   odoo_tenancy_id: number | null;
-  
-  display_tenancy_name?: string; 
+  tracking_code: string | null;
+  contact_name: string | null;
+  ticket_type?: 'defect' | 'request';
+  display_tenancy_name?: string;
   display_property_id?: string;
-  asset_name?: string; 
+  display_property_ref?: string;
+  display_property_city?: string;
+  display_tenant_name?: string;
 };
+
+const STATUS_TABS: { key: string; label: string }[] = [
+  { key: 'all', label: 'Alle' },
+  { key: 'new', label: 'Neu' },
+  { key: 'open', label: 'Offen' },
+  { key: 'in_progress', label: 'In Bearbeitung' },
+  { key: 'closed', label: 'Geschlossen' },
+];
 
 export default function BackofficeTicketsPage() {
   const router = useRouter();
@@ -40,16 +61,18 @@ export default function BackofficeTicketsPage() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [claimingId, setClaimingId] = useState<string | null>(null);
+  // Filters
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [personFilter, setPersonFilter] = useState<'all' | 'andrea' | 'nadine'>('all');
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
       setErrorMsg(null);
 
-      // 1) Auth & Profil
       const { data: { user }, error: userError } = await supabase.auth.getUser();
-      if (userError || !user) { router.push('/sign-in'); return; }
+      if (userError || !user) { router.push('/auth'); return; }
 
       const { data: profileData, error: profileError } = await supabase
         .from('profiles')
@@ -58,26 +81,27 @@ export default function BackofficeTicketsPage() {
         .single();
 
       if (profileError || !profileData) {
-        setErrorMsg("Profil konnte nicht geladen werden.");
-        setLoading(false);
-        return;
-      }
-      setProfile(profileData as Profile);
-      if (profileData.role !== 'admin_am') {
-        setErrorMsg("Zugriff verweigert: Nur für Asset Manager.");
+        setErrorMsg('Profil konnte nicht geladen werden.');
         setLoading(false);
         return;
       }
 
-      // 2) Tickets
+      setProfile(profileData as Profile);
+
+      if (profileData.role !== 'admin_am') {
+        setErrorMsg('Zugriff verweigert: Nur für Asset Manager.');
+        setLoading(false);
+        return;
+      }
+
       const { data: ticketsData, error: ticketsError } = await supabase
         .from('tickets')
-        .select('*') 
-        .neq('status', 'closed')
+        .select('*')
+        .neq('status', 'archived')
         .order('created_at', { ascending: false });
 
       if (ticketsError) {
-        setErrorMsg("Fehler beim Laden der Tickets.");
+        setErrorMsg('Fehler beim Laden der Tickets.');
         setLoading(false);
         return;
       }
@@ -86,23 +110,46 @@ export default function BackofficeTicketsPage() {
       setTickets(rawTickets);
       setLoading(false);
 
-      // 3) Enrichissement Odoo
-      const idsToFetch = rawTickets
-        .map(t => t.odoo_tenancy_id)
+      // Enrichissement Odoo - Tenancy names
+      const tenancyIdsToFetch = rawTickets
+        .map((t) => t.odoo_tenancy_id)
         .filter((id): id is number => id !== null && id > 0);
 
-      if (idsToFetch.length > 0) {
-        const res = await getTenancyNamesAction(idsToFetch);
+      if (tenancyIdsToFetch.length > 0) {
+        const res = await getTenancyNamesAction(tenancyIdsToFetch);
         if (res.success && res.data) {
           const map = res.data;
-          setTickets(currentTickets => 
-            currentTickets.map(t => {
+          setTickets((currentTickets) =>
+            currentTickets.map((t) => {
               if (t.odoo_tenancy_id && map[t.odoo_tenancy_id]) {
                 return {
                   ...t,
                   display_tenancy_name: map[t.odoo_tenancy_id].name,
-                  display_property_id: map[t.odoo_tenancy_id].property_id
+                  display_property_id: map[t.odoo_tenancy_id].property_id,
+                  display_property_ref: map[t.odoo_tenancy_id].property_ref,
+                  display_property_city: map[t.odoo_tenancy_id].property_city,
                 };
+              }
+              return t;
+            })
+          );
+        }
+      }
+
+      // Enrichissement Odoo - Partner names (tenant_id = res.partner.id)
+      const partnerIdsToFetch = rawTickets
+        .map((t) => Number(t.tenant_id))
+        .filter((id): id is number => !isNaN(id) && id > 0);
+
+      if (partnerIdsToFetch.length > 0) {
+        const res = await getPartnerNamesAction(partnerIdsToFetch);
+        if (res.success && res.data) {
+          const map = res.data;
+          setTickets((currentTickets) =>
+            currentTickets.map((t) => {
+              const partnerId = Number(t.tenant_id);
+              if (partnerId && map[partnerId]) {
+                return { ...t, display_tenant_name: map[partnerId] };
               }
               return t;
             })
@@ -114,213 +161,330 @@ export default function BackofficeTicketsPage() {
     load();
   }, [router]);
 
-  // --- ACTIONS ---
-  const handleClaim = async (e: React.MouseEvent, ticketId: string) => {
-    e.stopPropagation();
-    if (!profile?.full_name) {
-        alert("Profil ohne Namen.");
-        return;
-    }
-    setClaimingId(ticketId);
-    
-    const { error } = await supabase
-        .from('tickets')
-        .update({ pm: profile.full_name })
-        .eq('id', ticketId);
-
-    if (!error) {
-      setTickets((prev) => prev.map((t) => t.id === ticketId ? { ...t, pm: profile.full_name || 'Moi' } : t));
-    }
-    setClaimingId(null);
-  };
-
   // --- HELPERS ---
-  const formatDate = (iso: string) => new Date(iso).toLocaleDateString('de-DE');
-  const formatCost = (value: number | null | undefined) => value ? `${value} €` : '—';
-  
-  const getPriorityLabel = (p: string) => {
-    if(p==='high') return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-50 text-red-700 border border-red-100">Hoch</span>;
-    if(p==='medium') return <span className="text-gray-700 text-xs">Normal</span>;
-    return <span className="text-gray-500 text-xs">Niedrig</span>;
+  const formatDate = (iso: string) =>
+    new Date(iso).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+  const formatCost = (value: number | null | undefined) =>
+    value ? `${value.toLocaleString('de-DE')} €` : '—';
+
+  // Asset-Manager-Zuordnung & SLA kommen aus lib/ticketMetrics (eine Quelle der Wahrheit).
+  const assetGroup = (t: Ticket) => assetGroupFromRef(t.display_property_ref);
+  const relativeAge = (iso: string) => {
+    const d = ageInDays(iso);
+    if (d <= 0) return 'heute';
+    if (d === 1) return 'gestern';
+    return `vor ${d} Tagen`;
   };
-  
-  const getStatusLabel = (s: TicketStatus) => {
-    switch (s) {
-      case 'new': return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">Neu</span>;
-      case 'open': return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-100">Offen</span>;
-      case 'in_progress': return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-50 text-purple-700 border border-purple-100">In Bearbeitung</span>;
-      case 'closed': return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 border border-gray-200">Geschlossen</span>;
-      default: return <span>{s}</span>;
-    }
+
+  // --- FILTERING ---
+  let filteredTickets = tickets;
+
+  if (statusFilter === 'all') {
+    filteredTickets = filteredTickets.filter((t) => t.status !== 'closed');
+  } else {
+    filteredTickets = filteredTickets.filter((t) => t.status === statusFilter);
+  }
+
+  if (personFilter === 'andrea') {
+    filteredTickets = filteredTickets.filter((t) => assetGroup(t) === 'AD');
+  } else if (personFilter === 'nadine') {
+    filteredTickets = filteredTickets.filter((t) => assetGroup(t) === 'AC');
+  }
+
+  const q = search.trim().toLowerCase();
+  if (q) {
+    filteredTickets = filteredTickets.filter((t) =>
+      [
+        t.title,
+        t.tracking_code,
+        t.display_tenant_name,
+        t.contact_name,
+        t.display_property_ref,
+        t.display_property_city,
+        t.display_tenancy_name,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(q)
+    );
+  }
+
+  filteredTickets = [...filteredTickets].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
+
+  // Counts
+  const counts: Record<string, number> = {
+    all: tickets.filter((t) => t.status !== 'closed').length,
+    new: tickets.filter((t) => t.status === 'new').length,
+    open: tickets.filter((t) => t.status === 'open').length,
+    in_progress: tickets.filter((t) => t.status === 'in_progress').length,
+    closed: tickets.filter((t) => t.status === 'closed').length,
+    andrea: tickets.filter((t) => assetGroup(t) === 'AD' && t.status !== 'closed').length,
+    nadine: tickets.filter((t) => assetGroup(t) === 'AC' && t.status !== 'closed').length,
+    overdue: tickets.filter((t) => isOverdue(t)).length,
   };
 
   // --- RENDER ---
-  if (loading) return (
-    <main className="min-h-screen w-full bg-gray-100 flex items-center justify-center">
-      <div className="w-8 h-8 border-4 border-gray-300 border-t-black rounded-full animate-spin" />
-    </main>
-  );
+  if (loading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-zinc-50">
+        <Spinner className="h-8 w-8 text-zinc-400" />
+      </main>
+    );
+  }
 
-  if (errorMsg) return (
-    <main className="min-h-screen w-full bg-gray-100 flex items-center justify-center p-6">
-        <div className="bg-white p-8 rounded-xl shadow-sm border border-red-100 max-w-md w-full text-center">
-            <p className="text-red-600 font-medium">{errorMsg}</p>
-            <button onClick={() => router.push('/dashboard')} className="mt-4 text-sm underline">Dashboard</button>
-        </div>
-    </main>
-  );
+  if (errorMsg) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-zinc-50 p-6">
+        <Card className="max-w-sm p-8 text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-50">
+            <svg className="h-6 w-6 text-red-500" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            </svg>
+          </div>
+          <p className="font-medium text-zinc-900">{errorMsg}</p>
+          <Button variant="ghost" size="sm" className="mt-4" onClick={() => router.push('/dashboard')}>
+            ← Dashboard
+          </Button>
+        </Card>
+      </main>
+    );
+  }
 
   return (
-    <main className="min-h-screen w-full bg-gray-100 flex flex-col items-center p-6 text-gray-900">
-      
+    <main className="min-h-screen bg-zinc-50">
       {/* Header */}
-      <div className="w-full max-w-7xl flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-         <div className="text-center md:text-left">
-            <h1 className="text-3xl font-semibold text-gray-900">Backoffice Tickets</h1>
-            <p className="text-gray-500 text-sm mt-1">
-              {profile?.full_name ? `Eingeloggt als ${profile.full_name}` : 'Asset Management Übersicht'}
-            </p>
-         </div>
-         <button onClick={() => router.push('/dashboard')} className="text-sm text-gray-500 hover:text-gray-900 font-medium transition-colors px-4 py-2 rounded-lg hover:bg-gray-200 border border-transparent hover:border-gray-300">
-          ← Dashboard
-        </button>
+      <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/90 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => router.push('/dashboard')}
+              className="flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-200 text-zinc-500 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+              </svg>
+            </button>
+            <div>
+              <h1 className="text-lg font-semibold text-zinc-900">Backoffice</h1>
+              <p className="text-xs text-zinc-500">{profile?.full_name}</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {counts.overdue > 0 && (
+              <Badge className="bg-red-50 text-red-600 ring-1 ring-red-200">
+                {counts.overdue} überfällig
+              </Badge>
+            )}
+            <Badge className="bg-zinc-100 text-zinc-600 ring-1 ring-zinc-200">
+              {counts.all} offen
+            </Badge>
+          </div>
+        </div>
+      </header>
+
+      {/* Filters */}
+      <div className="border-b border-zinc-200 bg-white">
+        <div className="mx-auto max-w-7xl space-y-3 px-6 py-3">
+          {/* Suche */}
+          <div className="relative">
+            <svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+            </svg>
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Suchen: Mieter, Adresse, Objekt-Code, Titel, MNG-Code…"
+              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 py-2 pl-10 pr-9 text-sm text-zinc-900 transition-all placeholder:text-zinc-400 focus:border-indigo-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+            />
+            {search && (
+              <button
+                onClick={() => setSearch('')}
+                title="Leeren"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 transition-colors hover:text-zinc-700"
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
+
+          {/* Filter-Leiste */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex gap-1 overflow-x-auto">
+            {STATUS_TABS.map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setStatusFilter(key)}
+                className={cn(
+                  'flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium transition-colors',
+                  statusFilter === key
+                    ? 'bg-zinc-900 text-white'
+                    : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900'
+                )}
+              >
+                {label}
+                <span className={cn('text-xs', statusFilter === key ? 'text-white/60' : 'text-zinc-400')}>
+                  {counts[key] || 0}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Asset-Manager-Filter: Andrea = AD-Objekte, Nadine = AC-Objekte */}
+            <button
+              onClick={() => setPersonFilter(personFilter === 'andrea' ? 'all' : 'andrea')}
+              className={cn(
+                'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors',
+                personFilter === 'andrea'
+                  ? 'bg-emerald-600 text-white'
+                  : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
+              )}
+            >
+              <span className={cn('h-2 w-2 rounded-full', personFilter === 'andrea' ? 'bg-white' : 'bg-emerald-500')} />
+              Andrea
+              <span className={cn('text-xs', personFilter === 'andrea' ? 'text-white/70' : 'text-zinc-400')}>
+                {counts.andrea}
+              </span>
+            </button>
+            <button
+              onClick={() => setPersonFilter(personFilter === 'nadine' ? 'all' : 'nadine')}
+              className={cn(
+                'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors',
+                personFilter === 'nadine'
+                  ? 'bg-amber-600 text-white'
+                  : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
+              )}
+            >
+              <span className={cn('h-2 w-2 rounded-full', personFilter === 'nadine' ? 'bg-white' : 'bg-amber-500')} />
+              Nadine
+              <span className={cn('text-xs', personFilter === 'nadine' ? 'text-white/70' : 'text-zinc-400')}>
+                {counts.nadine}
+              </span>
+            </button>
+
+          </div>
+          </div>
+        </div>
       </div>
 
-      <div className="w-full max-w-7xl space-y-6">
-        
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-          {tickets.length === 0 ? (
-            <div className="p-16 text-center space-y-4">
-              <div className="text-3xl grayscale">🎉</div>
-              <div>
-                <h3 className="text-lg font-medium text-gray-900">Alles erledigt</h3>
-                <p className="text-sm text-gray-500 mt-1">Keine offenen Tickets im System.</p>
-              </div>
+      {/* Content */}
+      <div className="mx-auto max-w-7xl px-6 py-6">
+        {filteredTickets.length === 0 ? (
+          <Card className="py-16 text-center">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-zinc-100">
+              <svg className="h-6 w-6 text-zinc-300" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
             </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left">
-                <thead className="bg-gray-50 border-b border-gray-100 text-xs uppercase font-semibold text-gray-500">
-                  <tr>
-                    <th className="px-6 py-4 w-32">Datum</th>
-                    <th className="px-6 py-4 w-48">Mieter</th>
-                    <th className="px-6 py-4">Ticket</th>
-                    <th className="px-6 py-4 w-32">Priorität</th>
-                    <th className="px-6 py-4 w-44">Verantwortlich (PM)</th>
-                    <th className="px-6 py-4 w-32 text-right">Kosten</th>
-                    <th className="px-6 py-4 w-32 text-center">Status</th>
-                    <th className="px-6 py-4 w-10"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {tickets.map((t) => (
-                    <tr 
-                      key={t.id} 
-                      className="hover:bg-gray-50 transition group cursor-pointer"
-                      onClick={() => router.push(`/tickets/${t.id}`)}
-                    >
-                      <td className="px-6 py-4 text-gray-500 whitespace-nowrap align-top font-mono text-xs">
-                        {formatDate(t.created_at)}
-                      </td>
+            <p className="text-zinc-500">Keine Tickets gefunden.</p>
+          </Card>
+        ) : (
+          <Card className="divide-y divide-zinc-100 overflow-hidden p-0">
+            {filteredTickets.map((t) => {
+              const prio = priorityMeta(t.priority);
+              return (
+                <div
+                  key={t.id}
+                  onClick={() => router.push(`/tickets/${t.id}`)}
+                  className="group flex cursor-pointer items-center gap-3 px-5 py-2 transition-colors hover:bg-zinc-50"
+                >
+                  {/* Priority accent */}
+                  <span className={cn('h-2 w-2 shrink-0 rounded-full', prio.dot)} title={prio.label} />
 
-                      <td className="px-6 py-4 align-top">
-                        <span className="font-medium text-gray-900 block">
-                            {t.display_tenancy_name 
-                              ? t.display_tenancy_name 
-                              : (t.odoo_tenancy_id ? `Tenancy #${t.odoo_tenancy_id}` : 'N/A')
-                            }
-                        </span>
-                      </td>
+                  {/* Status */}
+                  <div className="w-28 shrink-0">
+                    <StatusBadge status={t.status} />
+                  </div>
 
-                      <td className="px-6 py-4 align-top">
-                        {/* ✅ MODIFICATION ICI : Tronquer le titre à 80 caractères */}
-                        <div 
-                          className="font-semibold text-gray-900 text-base mb-1 group-hover:text-blue-600 transition-colors"
-                          title={t.title} // Affiche le titre complet au survol
+                  {/* Alter / SLA */}
+                  <div
+                    className={cn(
+                      'hidden w-24 shrink-0 text-xs lg:block',
+                      isOverdue(t) ? 'font-semibold text-red-600' : 'text-zinc-400'
+                    )}
+                    title={formatDate(t.created_at)}
+                  >
+                    {relativeAge(t.created_at)}
+                  </div>
+
+                  {/* Tenant + Objekt (Code · Stadt) */}
+                  <div className="hidden min-w-0 flex-1 sm:block">
+                    <div className="truncate text-sm font-medium text-zinc-900">
+                      {t.display_tenant_name || t.contact_name || '—'}
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-1.5">
+                      {(t.display_property_ref || '').trim() && (
+                        <span
+                          className={cn(
+                            'shrink-0 rounded px-1.5 py-px font-mono text-[10px] font-semibold',
+                            assetGroup(t) === 'AD'
+                              ? 'bg-emerald-50 text-emerald-700'
+                              : assetGroup(t) === 'AC'
+                              ? 'bg-amber-50 text-amber-700'
+                              : 'bg-zinc-100 text-zinc-500'
+                          )}
                         >
-                          {t.title.length > 80 
-                            ? `${t.title.slice(0, 80)}...` 
-                            : t.title}
-                        </div>
+                          {(t.display_property_ref || '').trim()}
+                        </span>
+                      )}
+                      <span className="truncate text-xs text-zinc-500">
+                        {t.display_property_city ||
+                          t.display_tenancy_name ||
+                          (t.odoo_tenancy_id ? `#${t.odoo_tenancy_id}` : '')}
+                      </span>
+                    </div>
+                  </div>
 
-                        {t.description && (
-                          <div className="text-gray-500 text-xs line-clamp-1 max-w-md">
-                            {t.description}
-                          </div>
-                        )}
-                      </td>
+                  {/* Title + meta */}
+                  <div className="min-w-0 flex-1">
+                    <h3
+                      className="truncate text-sm font-medium text-zinc-900 group-hover:text-indigo-600"
+                      title={t.title}
+                    >
+                      {t.title}
+                    </h3>
+                    <div className="mt-0.5 flex items-center gap-2 text-xs text-zinc-400">
+                      <span>{t.ticket_type === 'request' ? 'Anfrage' : 'Mangel'}</span>
+                      {t.tracking_code && <span className="truncate font-mono">{t.tracking_code}</span>}
+                      {isOverdue(t) && (
+                        <span className="shrink-0 rounded bg-red-50 px-1.5 py-px text-[10px] font-semibold text-red-600">
+                          Überfällig
+                        </span>
+                      )}
+                    </div>
+                  </div>
 
-                      <td className="px-6 py-4 align-top">
-                        {getPriorityLabel(t.priority)}
-                      </td>
+                  {/* Cost */}
+                  <div className="hidden w-20 shrink-0 text-right font-mono text-xs text-zinc-500 sm:block">
+                    {formatCost(t.cost_estimated)}
+                  </div>
 
-                      <td className="px-6 py-4 align-top">
-                        {t.pm ? (
-                            <div className="flex flex-col items-start gap-1">
-                                <div className="flex items-center gap-2">
-                                    <div className="w-6 h-6 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center text-xs font-bold">
-                                        {t.pm.charAt(0)}
-                                    </div>
-                                    <span className="text-sm text-gray-700 truncate max-w-[120px]" title={t.pm}>
-                                        {t.pm}
-                                    </span>
-                                </div>
-                                
-                                {t.pm !== profile?.full_name && (
-                                    <button
-                                        onClick={(e) => handleClaim(e, t.id)}
-                                        disabled={claimingId === t.id}
-                                        className="text-xs text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1 transition-colors mt-1"
-                                    >
-                                        {claimingId === t.id ? (
-                                            <span className="animate-spin h-3 w-3 border-2 border-blue-600 border-t-transparent rounded-full"></span>
-                                        ) : (
-                                            <span>↳ Übernehmen</span>
-                                        )}
-                                    </button>
-                                )}
-                            </div>
-                        ) : (
-                            <button
-                                onClick={(e) => handleClaim(e, t.id)}
-                                disabled={claimingId === t.id}
-                                className="text-xs border border-gray-300 bg-white hover:bg-gray-50 hover:border-gray-400 text-gray-700 px-3 py-1.5 rounded-md shadow-sm transition flex items-center gap-1.5"
-                            >
-                                {claimingId === t.id ? (
-                                    <span className="animate-spin h-3 w-3 border-2 border-gray-400 border-t-transparent rounded-full"></span>
-                                ) : (
-                                    <span>🙋‍♂️</span>
-                                )}
-                                Übernehmen
-                            </button>
-                        )}
-                      </td>
+                  {/* Arrow */}
+                  <svg
+                    className="h-4 w-4 shrink-0 text-zinc-300 transition-all group-hover:translate-x-0.5 group-hover:text-indigo-600"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                  </svg>
+                </div>
+              );
+            })}
+          </Card>
+        )}
 
-                      <td className="px-6 py-4 align-top text-right font-mono text-gray-700">
-                        {formatCost(t.cost_estimated)}
-                      </td>
-
-                      <td className="px-6 py-4 align-top text-center">
-                        {getStatusLabel(t.status)}
-                      </td>
-
-                      <td className="px-6 py-4 align-middle text-right text-gray-300 group-hover:text-gray-900 transition-colors">
-                        →
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-        
-        <div className="text-center pb-6">
-          <p className="text-xs text-gray-400">
-            Geschlossene Tickets werden standardmäßig ausgeblendet.
-          </p>
-        </div>
-
+        <p className="mt-5 text-center text-xs text-zinc-400">
+          Archivierte Tickets werden ausgeblendet.
+        </p>
       </div>
     </main>
   );

@@ -4,6 +4,8 @@ type OfferMailParams = {
   vendorName: string;
 
   description: string;
+  subjectLocation?: string | null;
+  beauftragungsNummer?: string | null;
 
   ownerEntityName?: string | null;
   ownerEntityAddress?: string | null;
@@ -21,7 +23,9 @@ type OfferMailParams = {
 };
 
 export function buildOfferMail(p: OfferMailParams) {
-  const subjectRaw = `Beauftragung – ${p.description}`.trim();
+  // Subject = "Beauftragung – <Ort>" (Straße/Stadt oder Objekt), kein Text-Auszug.
+  const subjectLocation = (p.subjectLocation || '').replace(/\s+/g, ' ').trim();
+  const subjectRaw = subjectLocation ? `Beauftragung – ${subjectLocation}` : 'Beauftragung';
 
   const ownerName = p.ownerEntityName || '—';
   const ownerAddr = p.ownerEntityAddress || '—';
@@ -82,9 +86,26 @@ Bitte senden Sie uns die Leistungsnachweise, inklusive der vom Mieter unterzeich
 Vielen Dank für Ihre Mühe bereits im Voraus. Wir freuen uns auf eine gute Zusammenarbeit.
 `;
 
+  // Short cover note for the e-mail body. The full formal letter lives in the
+  // PDF, so the e-mail itself just points to the attachment.
+  const coverNote = [
+    'Sehr geehrte Damen und Herren,',
+    '',
+    `anbei erhalten Sie unsere Beauftragung${
+      subjectLocation ? ` für das Objekt ${subjectLocation}` : ''
+    } als PDF im Anhang.`,
+    ...(p.beauftragungsNummer ? [`Beauftragungsnummer: ${p.beauftragungsNummer}`] : []),
+    `Gewünschte Ausführung: ${dueText}.`,
+    '',
+    'Über eine kurze Auftragsbestätigung freuen wir uns.',
+    '',
+    'Mit freundlichen Grüßen',
+  ].join('\n');
+
   return {
     to: p.vendorEmail,
     subject: subjectRaw,
-    body,
+    body, // full formal letter → goes into the PDF
+    coverNote, // short note → goes into the e-mail body
   };
 }

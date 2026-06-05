@@ -2,6 +2,21 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
+// Admin-only areas need a Supabase session. The public tenant flows
+// (landing, ticket creation, tracking) must stay reachable without an account.
+function requiresAuth(path: string): boolean {
+  if (path.startsWith('/dashboard')) return true
+  if (path.startsWith('/backoffice')) return true
+  if (path.startsWith('/tickets')) {
+    // Public, no-account tenant flows:
+    if (path === '/tickets/new' || path.startsWith('/tickets/new/')) return false
+    if (path === '/tickets/track' || path.startsWith('/tickets/track/')) return false
+    // Everything else under /tickets is admin (new-admin, existing, [id] detail).
+    return true
+  }
+  return false
+}
+
 export async function middleware(request: NextRequest) {
   // 1. Initialiser la réponse de base
   let response = NextResponse.next({
@@ -69,8 +84,8 @@ export async function middleware(request: NextRequest) {
   // --- LOGIQUE DE PROTECTION ---
 
   // CAS A : L'utilisateur n'est PAS connecté
-  // S'il essaie d'aller sur le dashboard (ou toute route protégée), on le renvoie au Login
-  if (!user && path.startsWith('/dashboard')) {
+  // S'il essaie d'aller sur une route admin, on le renvoie au Login.
+  if (!user && requiresAuth(path)) {
     const url = request.nextUrl.clone()
     url.pathname = '/auth'
     return NextResponse.redirect(url)
@@ -80,7 +95,7 @@ export async function middleware(request: NextRequest) {
   if (user) {
     // 1. S'il essaie d'aller sur la page de Login/Activation (/auth) -> Dashboard
     // Attention : On utilise '===' pour ne cibler QUE la racine /auth
-    if (path === '/auth' || path === '/sign-in') {
+    if (path === '/auth') {
         const url = request.nextUrl.clone()
         url.pathname = '/dashboard'
         return NextResponse.redirect(url)

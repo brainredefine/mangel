@@ -201,6 +201,94 @@ export async function fetchTenanciesFromOdoo(partnerId: number) {
 }
 
 /**
+ * Public tenant flow: resolve a property.tenancy by ID -> its tenant (partner)
+ * + objet (property). The tenant types this tenancy id as their "Mieter-ID".
+ */
+export async function fetchTenancyForIdentify(tenancyId: number): Promise<{
+  id: number;
+  name: string | null;
+  partner_id: number | null;
+  partner_name: string | null;
+  asset_id: number | null;
+  property_street: string | null;
+  property_zip: string | null;
+  property_city: string | null;
+  property_company: string | null;
+} | null> {
+  if (!tenancyId || tenancyId <= 0) return null;
+
+  const { client, common } = createOdooClient();
+  const uid = await authenticate(common);
+
+  const exec = <T>(
+    model: string,
+    method: string,
+    args: any[],
+    kwargs: Record<string, unknown> = {}
+  ) =>
+    new Promise<T>((resolve, reject) => {
+      client.methodCall(
+        'execute_kw',
+        [ODOO_CONFIG.db, uid, ODOO_CONFIG.password, model, method, args, kwargs],
+        (err: any, result: any) => (err ? reject(err) : resolve(result as T))
+      );
+    });
+
+  const tenancies = await exec<any[]>(
+    TENANCY_MODEL,
+    'search_read',
+    [[['id', '=', tenancyId]]],
+    { fields: ['id', 'name', 'partner_id', 'main_property_id'], limit: 1, context: { active_test: false } }
+  );
+  if (!tenancies || tenancies.length === 0) return null;
+
+  const t = tenancies[0];
+  const partner = t.partner_id;
+  const partner_id = Array.isArray(partner)
+    ? Number(partner[0])
+    : typeof partner === 'number'
+    ? partner
+    : null;
+  const partner_name = Array.isArray(partner) ? String(partner[1]) : null;
+
+  const mp = t.main_property_id;
+  const propId = Array.isArray(mp) ? Number(mp[0]) : typeof mp === 'number' ? mp : null;
+
+  let property_street: string | null = null;
+  let property_zip: string | null = null;
+  let property_city: string | null = null;
+  let property_company: string | null = null;
+
+  if (propId) {
+    const props = await exec<any[]>(
+      PROPERTY_MODEL,
+      'search_read',
+      [[['id', '=', propId]]],
+      { fields: ['id', 'street', 'zip', 'city', 'company_id'], limit: 1, context: { active_test: false } }
+    );
+    const p = props && props[0];
+    if (p) {
+      property_street = p.street || null;
+      property_zip = p.zip || null;
+      property_city = p.city || null;
+      property_company = Array.isArray(p.company_id) ? p.company_id[1] || null : null;
+    }
+  }
+
+  return {
+    id: Number(t.id),
+    name: t.name || null,
+    partner_id,
+    partner_name,
+    asset_id: propId,
+    property_street,
+    property_zip,
+    property_city,
+    property_company,
+  };
+}
+
+/**
  * 2️⃣ Utilisé par app/tickets/[id]/actions.ts
  * Bridge : partir de odoo_tenancy_id (Supabase) -> property.tenancy -> property.property
  * et renvoyer Tenancy + Objekt + Adresse + dates + REFERENCE + INTERNAL_LABEL (pour le matching tags).
@@ -765,14 +853,15 @@ export async function fetchTenanciesNamesByIds(ids: (number | string)[]) {
 
   if (!ids || ids.length === 0) return {};
 
-  // 1. Conversion impérative en NUMBER et dédoublonnage
   const uniqueIds = Array.from(new Set(ids.map(id => Number(id)))).filter((id) => !isNaN(id) && id > 0);
 
   console.log("🔢 [OdooClient] Converted IDs for Odoo:", uniqueIds);
 
   if (uniqueIds.length === 0) return {};
 
-  return new Promise<Record<number, { name: string; property_id: string }>>((resolve, reject) => {
+  type TenancyInfo = { name: string; property_id: string; property_ref: string; property_city: string; tenant_name: string };
+
+  return new Promise<Record<number, TenancyInfo>>((resolve, reject) => {
     const { client, common } = createOdooClient();
 
     authenticate(common)
@@ -783,13 +872,13 @@ export async function fetchTenanciesNamesByIds(ids: (number | string)[]) {
             ODOO_CONFIG.db,
             uid,
             ODOO_CONFIG.password,
-            TENANCY_MODEL, // 'property.tenancy'
-            'read',        // Méthode read
-            [uniqueIds],   // IDs (Integers)
+            TENANCY_MODEL,
+            'read',
+            [uniqueIds],
             {
-              fields: ['id', 'name', 'main_property_id'],
-              // Contexte pour inclure les éléments archivés (active: false)
-              context: { active_test: false } 
+              // partner_id pour le nom du tenant, main_property_id pour le bien
+              fields: ['id', 'name', 'main_property_id', 'partner_id'],
+              context: { active_test: false },
             },
           ],
           (readErr: any, results: any[]) => {
@@ -800,22 +889,125 @@ export async function fetchTenanciesNamesByIds(ids: (number | string)[]) {
 
             console.log(`✅ [OdooClient] Received ${results?.length} items from Odoo`);
 
-            const map: Record<number, { name: string; property_id: string }> = {};
+            const rows = Array.isArray(results) ? results : [];
+
+            // Property id par tenancy + set unique d'ids à résoudre en référence
+            const propIdByTenancy: Record<number, number | null> = {};
+            const propIds = new Set<number>();
+            rows.forEach((item) => {
+              let pid: number | null = null;
+              if (Array.isArray(item.main_property_id) && item.main_property_id.length > 0) {
+                pid = Number(item.main_property_id[0]);
+              } else if (item.main_property_id) {
+                pid = Number(item.main_property_id);
+              }
+              propIdByTenancy[item.id] = pid && !isNaN(pid) ? pid : null;
+              if (pid && !isNaN(pid)) propIds.add(pid);
+            });
+
+            const buildMap = (propInfo: Record<number, { ref: string; city: string }>) => {
+              const map: Record<number, TenancyInfo> = {};
+              rows.forEach((item) => {
+                const pid = propIdByTenancy[item.id];
+                const info = pid ? propInfo[pid] : undefined;
+                let tenantName = '';
+                if (Array.isArray(item.partner_id) && item.partner_id.length > 1) {
+                  tenantName = String(item.partner_id[1]);
+                }
+                map[item.id] = {
+                  name: item.name || '',
+                  property_id: pid ? String(pid) : '',
+                  property_ref: info?.ref || '',
+                  property_city: info?.city || '',
+                  tenant_name: tenantName,
+                };
+              });
+              resolve(map);
+            };
+
+            const propIdArr = Array.from(propIds);
+            if (propIdArr.length === 0) {
+              return buildMap({});
+            }
+
+            // Résout les références de bien (ex: "AD2", "AC10") en un seul read
+            client.methodCall(
+              'execute_kw',
+              [
+                ODOO_CONFIG.db,
+                uid,
+                ODOO_CONFIG.password,
+                PROPERTY_MODEL,
+                'read',
+                [propIdArr],
+                { fields: ['id', 'reference_id', 'city'] },
+              ],
+              (propErr: any, propResults: any[]) => {
+                if (propErr) {
+                  console.error('❌ [OdooClient] property read error:', propErr);
+                  return buildMap({}); // dégrade proprement — infos vides
+                }
+                const propInfo: Record<number, { ref: string; city: string }> = {};
+                (Array.isArray(propResults) ? propResults : []).forEach((p) => {
+                  propInfo[p.id] = {
+                    ref: p.reference_id ? String(p.reference_id) : '',
+                    city: p.city ? String(p.city) : '',
+                  };
+                });
+                buildMap(propInfo);
+              }
+            );
+          }
+        );
+      })
+      .catch((err) => {
+        console.error('❌ [OdooClient] Auth failed:', err);
+        reject(err);
+      });
+  });
+}
+
+export async function fetchPartnerNamesByIds(ids: (number | string)[]): Promise<Record<number, string>> {
+  console.log("⚡ [OdooClient] fetchPartnerNamesByIds called with IDs:", ids);
+
+  if (!ids || ids.length === 0) return {};
+
+  const uniqueIds = Array.from(new Set(ids.map(id => Number(id)))).filter((id) => !isNaN(id) && id > 0);
+
+  if (uniqueIds.length === 0) return {};
+
+  return new Promise<Record<number, string>>((resolve, reject) => {
+    const { client, common } = createOdooClient();
+
+    authenticate(common)
+      .then((uid) => {
+        client.methodCall(
+          'execute_kw',
+          [
+            ODOO_CONFIG.db,
+            uid,
+            ODOO_CONFIG.password,
+            PARTNER_MODEL,  // 'res.partner'
+            'read',
+            [uniqueIds],
+            {
+              fields: ['id', 'name'],
+              context: { active_test: false }
+            },
+          ],
+          (readErr: any, results: any[]) => {
+            if (readErr) {
+              console.error('❌ [OdooClient] read partner error:', readErr);
+              return reject(readErr);
+            }
+
+            console.log(`✅ [OdooClient] Received ${results?.length} partners from Odoo`);
+
+            const map: Record<number, string> = {};
 
             if (results && Array.isArray(results)) {
               results.forEach((item) => {
-                // Odoo renvoie main_property_id sous forme [id, "Nom"] ou false
-                let propIdStr = '';
-                if (Array.isArray(item.main_property_id) && item.main_property_id.length > 0) {
-                  propIdStr = String(item.main_property_id[0]);
-                } else if (item.main_property_id) {
-                    propIdStr = String(item.main_property_id);
-                }
-
-                map[item.id] = {
-                  name: item.name || '',
-                  property_id: propIdStr,
-                };
+                map[item.id] = item.name || '';
               });
             }
             resolve(map);
@@ -827,6 +1019,100 @@ export async function fetchTenanciesNamesByIds(ids: (number | string)[]) {
         reject(err);
       });
   });
+}
+
+// ============================================================
+// AJOUTER dans lib/odooClient.ts
+// Fonction pour récupérer le profil complet d'un partner
+// ============================================================
+
+export type PartnerProfile = {
+  id: number;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  mobile: string | null;
+  address: string | null;
+  vat: string | null;
+};
+
+/**
+ * Récupère le profil complet d'un res.partner
+ */
+export async function fetchPartnerProfile(partnerId: number): Promise<PartnerProfile | null> {
+  console.log("⚡ [OdooClient] fetchPartnerProfile called for ID:", partnerId);
+
+  if (!partnerId || partnerId <= 0) {
+    console.log("⚠️ [OdooClient] Invalid partnerId");
+    return null;
+  }
+
+  const { client, common } = createOdooClient();
+
+  try {
+    const uid = await authenticate(common);
+    console.log("✅ [OdooClient] Authenticated, uid:", uid);
+
+    return new Promise<PartnerProfile | null>((resolve, reject) => {
+      // Utiliser search_read avec domain au lieu de read
+      client.methodCall(
+        'execute_kw',
+        [
+          ODOO_CONFIG.db,
+          uid,
+          ODOO_CONFIG.password,
+          PARTNER_MODEL,
+          'search_read',
+          [[['id', '=', partnerId]]],  // domain: id = partnerId
+          {
+            fields: [
+              'id',
+              'name',
+              'email',
+              'phone',
+              'mobile',
+              'contact_address_complete',
+              'vat',
+            ],
+            limit: 1,
+            context: { active_test: false }
+          },
+        ],
+        (readErr: any, results: any[]) => {
+          if (readErr) {
+            console.error('❌ [OdooClient] search_read error:', readErr);
+            return resolve(null);
+          }
+
+          console.log('📦 [OdooClient] Raw results:', JSON.stringify(results));
+
+          if (!results || results.length === 0) {
+            console.log('⚠️ [OdooClient] No partner found');
+            return resolve(null);
+          }
+
+          const partner = results[0];
+          console.log('✅ [OdooClient] Partner name:', partner.name);
+
+          const profile: PartnerProfile = {
+            id: partner.id,
+            name: partner.name || '',
+            email: partner.email || null,
+            phone: partner.phone || null,
+            mobile: partner.mobile || null,
+            address: partner.contact_address_complete || null,
+            vat: partner.vat || null,
+          };
+
+          console.log('🏁 [OdooClient] Returning profile:', JSON.stringify(profile));
+          resolve(profile);
+        }
+      );
+    });
+  } catch (err) {
+    console.error('❌ [OdooClient] fetchPartnerProfile error:', err);
+    return null;
+  }
 }
 
 /**

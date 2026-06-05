@@ -1,3 +1,5 @@
+// /app/tickets/new-admin/page.tsx
+
 'use client';
 
 import {
@@ -13,91 +15,51 @@ import {
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabaseClient';
 import { getAdminTenanciesAction } from './actions';
+import { Button, Spinner, cn } from '@/components/ui';
 
 // --- TYPES ---
 
 type Profile = {
   id: string;
-  role: string; // 'tenant_user' | 'admin_am'
+  role: string;
   tenant_id?: string | null;
   odoo_id?: string | null;
 };
 
 type TenancyOption = {
-  id: number; // odoo tenancy id
+  id: number;
   label: string;
   fullDetails: string;
   asset_id?: number | null;
-
-  tenant_partner_id?: number | null; // res.partner.id (Odoo)
+  tenant_partner_id?: number | null;
   tenant_partner_name?: string | null;
-
   entity_id?: number | null;
   entity_name?: string | null;
-
   property_company?: string | null;
 };
 
+type TicketType = 'defect' | 'request';
 type Priority = 'low' | 'medium' | 'high';
 
+// --- CATEGORIES ---
+
 const MAIN_CATEGORIES = [
-  { key: 'ELEKTRO', label: 'Licht & Elektrik', gewerk: 'Elektriker' },
-  { key: 'HKLS', label: 'Heizung, Klima & Lüftung', gewerk: 'HKLS' },
-  { key: 'SANITAER', label: 'Wasser & Sanitär', gewerk: 'Sanitärinstallateur' },
-  { key: 'TTF', label: 'Türen, Tore & Fenster', gewerk: 'Schlosser / Glaser / Torbauer' },
-  { key: 'BWD', label: 'Boden, Wand & Decke', gewerk: 'Maler / Bodenleger / Trockenbau' },
-  { key: 'SICHERHEIT', label: 'Sicherheit & Brandschutz', gewerk: 'Spezialtechnik' },
-  { key: 'AUSSEN', label: 'Außenbereich', gewerk: 'GaLa / Reinigung / Dach' },
-  { key: 'SONSTIGE', label: 'Sonstiges', gewerk: 'Allgemein' },
+  { key: 'ELEKTRO', label: 'Elektrik', icon: 'M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z' },
+  { key: 'HKLS', label: 'Heizung/Klima', icon: 'M15.362 5.214A8.252 8.252 0 0112 21 8.25 8.25 0 016.038 7.048 8.287 8.287 0 009 9.6a8.983 8.983 0 013.361-6.867 8.21 8.21 0 003 2.48z' },
+  { key: 'SANITAER', label: 'Sanitär', icon: 'M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
+  { key: 'TTF', label: 'Türen/Fenster', icon: 'M3 8.25V18a2.25 2.25 0 002.25 2.25h13.5A2.25 2.25 0 0021 18V8.25m-18 0V6a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 6v2.25m-18 0h18M5.25 6h.008v.008H5.25V6zM7.5 6h.008v.008H7.5V6zm2.25 0h.008v.008H9.75V6z' },
+  { key: 'BWD', label: 'Boden/Wand', icon: 'M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z' },
+  { key: 'SICHERHEIT', label: 'Sicherheit', icon: 'M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z' },
+  { key: 'AUSSEN', label: 'Außen', icon: 'M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25' },
+  { key: 'SONSTIGE', label: 'Sonstiges', icon: 'M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z' },
 ] as const;
 
-const SUBCATEGORY_OPTIONS: Record<string, [string, string][]> = {
-  ELEKTRO: [
-    ['ELEKTRO_BELEUCHTUNG_AUSGEFALLEN', 'Beleuchtung ausgefallen'],
-    ['ELEKTRO_STECKDOSE_DEFEKT', 'Steckdose defekt'],
-    ['ELEKTRO_SICHERUNG_SPRINGT', 'Sicherung springt raus'],
-    ['ELEKTRO_KEIN_STROM', 'Kein Strom'],
-  ],
-  HKLS: [
-    ['HKLS_ZU_KALT_WARM', 'Zu kalt / zu warm'],
-    ['HKLS_KLIMA_TROPFT', 'Klimaanlage tropft'],
-    ['HKLS_LUEFTUNG_LAUT_DEFEKT', 'Lüftung laut / defekt'],
-    ['HKLS_UNANGENEHMER_GERUCH', 'Unangenehmer Geruch'],
-    ['HKLS_HEIZUNGSAUSFALL', 'Heizungsausfall'],
-  ],
-  SANITAER: [
-    ['SANITAER_VERSTOPFUNG', 'Verstopfung (WC/Waschbecken)'],
-    ['SANITAER_WASSERHAHN_TROPFT', 'Wasserhahn tropft'],
-    ['SANITAER_KEIN_WARMWASSER', 'Kein Warmwasser'],
-    ['SANITAER_ROHRBRUCH', 'Rohrbruch / Wasseraustritt'],
-  ],
-  TTF: [
-    ['TTF_AUTOMATIKTUER_OEFFNET_NICHT', 'Automatiktür öffnet nicht'],
-    ['TTF_ROLLTOR_DEFEKT', 'Rolltor defekt (Warenannahme)'],
-    ['TTF_SCHAUFENSTER_BESCHAEDIGT', 'Schaufenster beschädigt / Glasbruch'],
-    ['TTF_SCHLOSS_KLEMMT', 'Schloss klemmt'],
-    ['TTF_ZUGLUFT', 'Zugluft'],
-  ],
-  BWD: [
-    ['BWD_FLISE_LOCKER_GEBROCHEN', 'Fliese locker / gebrochen'],
-    ['BWD_BODEN_STOLPERFALLE', 'Bodenbelag Stolperfalle'],
-    ['BWD_WASSERFLECK_DECKE_WAND', 'Wasserfleck an Decke / Wand'],
-    ['BWD_PUTZ_BROECKELT', 'Putz bröckelt'],
-  ],
-  SICHERHEIT: [
-    ['SICHERHEIT_SPRINKLERANLAGE', 'Sprinkleranlage'],
-    ['SICHERHEIT_FEUERLOESCHER', 'Feuerlöscher fehlt / abgelaufen'],
-    ['SICHERHEIT_NOTAUSGANGSLEUCHTE', 'Notausgangsleuchte defekt'],
-    ['SICHERHEIT_EINBRUCHSCHADEN', 'Einbruchschaden'],
-  ],
-  AUSSEN: [
-    ['AUSSEN_MUELL_VERSCHMUTZUNG', 'Müll / Verschmutzung'],
-    ['AUSSEN_GRAFFITI', 'Graffiti'],
-    ['AUSSEN_PARKPLATZBELEUCHTUNG', 'Parkplatzbeleuchtung'],
-    ['AUSSEN_DACH_UNDICHT', 'Dach undicht'],
-  ],
-  SONSTIGE: [['SONSTIGE_ALLGEMEIN', 'Sonstiges Problem / Nicht zugeordnet']],
-};
+const REQUEST_CATEGORIES = [
+  { key: 'DOCUMENT', label: 'Dokument', icon: 'M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z' },
+  { key: 'CERTIFICATE', label: 'Bescheinigung', icon: 'M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z' },
+  { key: 'QUESTION', label: 'Frage', icon: 'M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z' },
+  { key: 'OTHER', label: 'Sonstiges', icon: 'M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
+];
 
 // --- IMAGE EDITOR MODAL ---
 
@@ -117,7 +79,6 @@ function ImageEditorModal({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
     const context = canvas.getContext('2d');
     if (!context) return;
 
@@ -129,28 +90,20 @@ function ImageEditorModal({
       context.drawImage(img, 0, 0);
       context.lineWidth = Math.max(5, img.width / 150);
       context.lineCap = 'round';
-      context.strokeStyle = '#EF4444';
+      context.strokeStyle = '#6366f1';
       setCtx(context);
     };
 
-    return () => {
-      try {
-        URL.revokeObjectURL(img.src);
-      } catch {}
-    };
+    return () => { try { URL.revokeObjectURL(img.src); } catch {} };
   }, [file]);
 
   const getPos = (e: ReactMouseEvent | ReactTouchEvent) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
-
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
-
-    let clientX: number;
-    let clientY: number;
-
+    let clientX: number, clientY: number;
     if ('touches' in e) {
       clientX = e.touches[0].clientX;
       clientY = e.touches[0].clientY;
@@ -158,7 +111,6 @@ function ImageEditorModal({
       clientX = (e as ReactMouseEvent).clientX;
       clientY = (e as ReactMouseEvent).clientY;
     }
-
     return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
   };
 
@@ -187,32 +139,28 @@ function ImageEditorModal({
   const handleSave = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
-    canvas.toBlob(
-      (blob) => {
-        if (!blob) return;
-        const newFile = new File([blob], file.name, { type: file.type, lastModified: Date.now() });
-        onSave(newFile);
-      },
-      file.type,
-      0.92
-    );
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const newFile = new File([blob], file.name, { type: file.type, lastModified: Date.now() });
+      onSave(newFile);
+    }, file.type, 0.92);
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80 p-4">
-      <div className="bg-white rounded-xl shadow-2xl overflow-hidden max-w-4xl w-full flex flex-col max-h-[90vh]">
-        <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
-          <h3 className="font-semibold text-lg">Bild markieren</h3>
-          <button onClick={onClose} className="text-gray-500 hover:text-black">
-            ✕ Schließen
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+      <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-zinc-100 p-4">
+          <h3 className="text-lg font-semibold text-zinc-900">Bild markieren</h3>
+          <button onClick={onClose} className="text-zinc-400 transition-colors hover:text-zinc-900">
+            <svg className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </button>
         </div>
-
-        <div className="flex-1 overflow-auto p-4 bg-gray-100 flex justify-center touch-none">
+        <div className="flex flex-1 touch-none justify-center overflow-auto bg-zinc-100 p-4">
           <canvas
             ref={canvasRef}
-            className="max-w-full h-auto shadow-lg bg-white cursor-crosshair"
+            className="h-auto max-w-full cursor-crosshair bg-white"
             onMouseDown={startDrawing}
             onMouseMove={draw}
             onMouseUp={stopDrawing}
@@ -222,28 +170,29 @@ function ImageEditorModal({
             onTouchEnd={stopDrawing}
           />
         </div>
-
-        <div className="p-4 border-t border-gray-200 flex justify-end gap-3 bg-white">
-          <p className="text-xs text-gray-500 mr-auto">💡 Zeichnen Sie mit der Maus oder dem Finger auf das Bild.</p>
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-gray-700 hover:bg-gray-100 font-medium">
+        <div className="flex justify-end gap-3 border-t border-zinc-100 p-4">
+          <Button variant="secondary" onClick={onClose}>
             Abbrechen
-          </button>
-          <button onClick={handleSave} className="px-6 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 font-medium shadow-sm">
+          </Button>
+          <Button onClick={handleSave}>
             Speichern
-          </button>
+          </Button>
         </div>
       </div>
     </div>
   );
 }
 
-// --- PAGE ---
+// --- MAIN PAGE ---
 
 export default function NewAdminTicketPage() {
   const router = useRouter();
 
-  // Profile
+  // Profile & Auth
   const [profile, setProfile] = useState<Profile | null>(null);
+
+  // Ticket Type
+  const [ticketType, setTicketType] = useState<TicketType | null>(null);
 
   // Tenancies
   const [tenancies, setTenancies] = useState<TenancyOption[]>([]);
@@ -251,44 +200,37 @@ export default function NewAdminTicketPage() {
   const [selectedTenancyId, setSelectedTenancyId] = useState<string>('');
   const [tenancySearch, setTenancySearch] = useState('');
 
-  // Form fields
-  const [contactPhone, setContactPhone] = useState('');
-  const [contactEmail, setContactEmail] = useState('');
-
-  const [accessRequired, setAccessRequired] = useState<boolean | null>(null);
-  const [accessTimeWindow, setAccessTimeWindow] = useState('');
-  const [accessInstructions, setAccessInstructions] = useState('');
-
+  // Common fields
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-
-  const [area, setArea] = useState('');
-  const [detailedLocation, setDetailedLocation] = useState('');
-
-  const [categories, setCategories] = useState<string[]>([]);
-  const [mainCategory, setMainCategory] = useState<string>('');
-
-  const [priority, setPriority] = useState<Priority>('medium');
-
-  const [attachmentsDescription, setAttachmentsDescription] = useState('');
-  const [extraContactInfo, setExtraContactInfo] = useState('');
-
   const [files, setFiles] = useState<File[]>([]);
   const [editingFileIndex, setEditingFileIndex] = useState<number | null>(null);
 
+  // Defect specific
+  const [contactPhone, setContactPhone] = useState('');
+  const [contactEmail, setContactEmail] = useState('');
+  const [accessRequired, setAccessRequired] = useState<boolean | null>(null);
+  const [accessTimeWindow, setAccessTimeWindow] = useState('');
+  const [accessInstructions, setAccessInstructions] = useState('');
+  const [area, setArea] = useState('');
+  const [detailedLocation, setDetailedLocation] = useState('');
+  const [mainCategory, setMainCategory] = useState<string>('');
+  const [priority, setPriority] = useState<Priority>('medium');
+  const [extraNotes, setExtraNotes] = useState('');
+
+  // Request specific
+  const [requestCategory, setRequestCategory] = useState<string>('');
+
+  // State
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  // Gate admin & load profile
+  // Load profile
   useEffect(() => {
     const loadProfile = async () => {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
-
-      if (userError || !user) {
-        router.push('/auth');
-        return;
-      }
+      if (userError || !user) { router.push('/auth'); return; }
 
       const { data, error } = await supabase
         .from('profiles')
@@ -297,8 +239,7 @@ export default function NewAdminTicketPage() {
         .single();
 
       if (error || !data) {
-        console.error('Erreur chargement profil:', error);
-        setErrorMsg('Ihr Profil kann nicht geladen werden.');
+        setErrorMsg('Profil konnte nicht geladen werden.');
         return;
       }
 
@@ -310,29 +251,23 @@ export default function NewAdminTicketPage() {
       setProfile(data as Profile);
       if (user.email) setContactEmail(user.email);
     };
-
     loadProfile();
   }, [router]);
 
-  // Fetch tenancies once (ALL from Odoo, already filtered server-side in actions.ts)
+  // Load tenancies
   useEffect(() => {
-    const fetchAllTenancies = async () => {
+    const fetchTenancies = async () => {
       if (!profile || profile.role !== 'admin_am') return;
-
       setLoadingTenancies(true);
       const res = await getAdminTenanciesAction();
-
       if (res?.success && res.data) {
         setTenancies(res.data);
       } else {
-        console.error('Admin Tenancies error:', res?.error);
         setErrorMsg(res?.error || 'Fehler beim Laden der Objekte.');
       }
-
       setLoadingTenancies(false);
     };
-
-    fetchAllTenancies();
+    fetchTenancies();
   }, [profile]);
 
   const filteredTenancies = useMemo(() => {
@@ -346,681 +281,591 @@ export default function NewAdminTicketPage() {
     [tenancies, selectedTenancyId]
   );
 
-  // Files
+  // Files handling
   const handleFilesChange = (e: ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      const newFiles = Array.from(e.target.files);
-      setFiles((prev) => [...prev, ...newFiles]);
+      setFiles((prev) => [...prev, ...Array.from(e.target.files!)]);
     }
     e.target.value = '';
   };
 
-  const removeFile = (indexToRemove: number) => setFiles((prev) => prev.filter((_, i) => i !== indexToRemove));
+  const removeFile = (index: number) => setFiles((prev) => prev.filter((_, i) => i !== index));
   const startEditing = (index: number) => setEditingFileIndex(index);
-
   const saveEditedFile = (newFile: File) => {
     if (editingFileIndex === null) return;
-    setFiles((prev) => {
-      const next = [...prev];
-      next[editingFileIndex] = newFile;
-      return next;
-    });
+    setFiles((prev) => { const next = [...prev]; next[editingFileIndex] = newFile; return next; });
     setEditingFileIndex(null);
   };
 
-  const toggleCategory = (value: string) => {
-    setCategories((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
-  };
-
+  // Submit
   const handleSubmit = async (e: FormEvent) => {
-  e.preventDefault();
-  setErrorMsg(null);
-  setSuccessMsg(null);
+    e.preventDefault();
+    setErrorMsg(null);
+    setSuccessMsg(null);
 
-  if (!profile || profile.role !== 'admin_am') {
-    setErrorMsg('Nicht autorisiert.');
-    return;
-  }
+    if (!profile || profile.role !== 'admin_am') {
+      setErrorMsg('Nicht autorisiert.');
+      return;
+    }
 
-  if (!selectedTenancyId) {
-    setErrorMsg('Bitte wählen Sie das betroffene Objekt aus.');
-    return;
-  }
+    if (!selectedTenancyId) {
+      setErrorMsg('Bitte wählen Sie das betroffene Objekt aus.');
+      return;
+    }
 
-  const selectedTenancy = tenancies.find((t) => String(t.id) === selectedTenancyId);
-  if (!selectedTenancy) {
-    setErrorMsg('Bitte wählen Sie eine gültige Mieteinheit aus.');
-    return;
-  }
+    if (!title.trim()) {
+      setErrorMsg('Bitte geben Sie einen Betreff ein.');
+      return;
+    }
 
-  // ✅ tenant_id (Supabase tickets) = Odoo res.partner.id (partner_id)
-  const odooPartnerId = selectedTenancy.tenant_partner_id;
-  if (!odooPartnerId || Number.isNaN(Number(odooPartnerId))) {
-    setErrorMsg("Diese Mieteinheit hat keinen gültigen Odoo Tenant (partner_id).");
-    return;
-  }
+    const tenancy = tenancies.find((t) => String(t.id) === selectedTenancyId);
+    if (!tenancy) {
+      setErrorMsg('Ungültige Mieteinheit.');
+      return;
+    }
 
-  setLoading(true);
+    const odooPartnerId = tenancy.tenant_partner_id;
+    if (!odooPartnerId) {
+      setErrorMsg('Diese Mieteinheit hat keinen gültigen Partner.');
+      return;
+    }
 
-  // Auth user (admin)
-  const { data: { user }, error: userError } = await supabase.auth.getUser();
-  if (userError || !user) {
-    setErrorMsg('Benutzer nicht authentifiziert.');
-    setLoading(false);
-    return;
-  }
+    setLoading(true);
 
-  const combinedContactInfo = `Tel: ${contactPhone}\nEmail: ${contactEmail}\n${extraContactInfo}`;
-  const finalDescription = description.trim();
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) {
+      setErrorMsg('Nicht authentifiziert.');
+      setLoading(false);
+      return;
+    }
 
-  // 1) Create ticket
-  const { data: ticketData, error: insertError } = await supabase
-    .from('tickets')
-    .insert({
-      // ✅ IMPORTANT: tickets.tenant_id is the Odoo partner_id (int)
+    const insertData: Record<string, any> = {
       tenant_id: Number(odooPartnerId),
-
-      // ✅ tenancy id Odoo
-      odoo_tenancy_id: Number(selectedTenancy.id),
-
-      // ✅ property.property.id (from main_property_id)
-      asset_id: selectedTenancy.asset_id ?? null,
-
+      odoo_tenancy_id: Number(tenancy.id),
+      asset_id: tenancy.asset_id ?? null,
       created_by: user.id,
       made_by_pm: true,
-
-      title,
-      description: finalDescription,
-      priority,
-
-      contact_phone: contactPhone,
-
-      building_section: area,
-      floor: null,
-      room: null,
-      location_description: detailedLocation,
-
-      categories,
-
-      access_required: accessRequired,
-      access_time_window: accessTimeWindow,
-      access_instructions: accessInstructions,
-
-      attachments_description: attachmentsDescription,
-      extra_contact_info: combinedContactInfo,
-
+      title: title.trim(),
+      description: description.trim(),
       status: 'new',
-    })
-    .select()
-    .single();
+      ticket_type: ticketType,
+    };
 
-  if (insertError || !ticketData) {
-    console.error('❌ insert ticket error', insertError);
-    setErrorMsg(insertError?.message || 'Fehler beim Erstellen des Tickets.');
-    setLoading(false);
-    return;
-  }
+    if (ticketType === 'defect') {
+      insertData.priority = priority;
+      insertData.contact_phone = contactPhone;
+      insertData.building_section = area;
+      insertData.location_description = detailedLocation;
+      insertData.categories = mainCategory ? [mainCategory] : [];
+      insertData.access_required = accessRequired;
+      insertData.access_time_window = accessTimeWindow;
+      insertData.access_instructions = accessInstructions;
+      insertData.extra_contact_info = extraNotes;
+    } else {
+      insertData.priority = 'medium';
+      insertData.categories = requestCategory ? [requestCategory] : [];
+    }
 
-  const ticketId = ticketData.id as string;
+    const { data: ticketData, error: insertError } = await supabase
+      .from('tickets')
+      .insert(insertData)
+      .select()
+      .single();
 
-  // 2) Upload attachments (if any)
-  let uploadedCount = 0;
+    if (insertError || !ticketData) {
+      setErrorMsg(insertError?.message || 'Fehler beim Erstellen.');
+      setLoading(false);
+      return;
+    }
 
-  if (files.length > 0) {
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
+    const ticketId = ticketData.id as string;
+
+    // Upload files
+    for (const file of files) {
       const sanitizedName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-      const path = `${Number(odooPartnerId)}/${ticketId}/${Date.now()}-${sanitizedName}`;
+      const path = `${odooPartnerId}/${ticketId}/${Date.now()}-${sanitizedName}`;
 
       const { error: uploadError } = await supabase.storage
         .from('ticket_attachments')
         .upload(path, file);
 
-      if (uploadError) {
-        console.error('❌ upload error', file.name, uploadError);
-        continue;
-      }
-
-      const { error: attachRowErr } = await supabase
-        .from('ticket_attachments')
-        .insert({
+      if (!uploadError) {
+        await supabase.from('ticket_attachments').insert({
           ticket_id: ticketId,
           uploaded_by: user.id,
           file_path: path,
           original_name: file.name,
           mime_type: file.type,
         });
-
-      if (attachRowErr) {
-        console.error('❌ ticket_attachments insert error', attachRowErr);
-        // (optionnel) continuer quand même
-      } else {
-        uploadedCount++;
       }
     }
-  }
 
-  // 3) Trigger IA report (best-effort)
-  try {
-    fetch(`/api/tickets/${ticketId}/generate-report`, { method: 'POST' }).catch((err) =>
-      console.error('Erreur trigger IA (background)', err)
+    // Trigger AI for defects only
+    if (ticketType === 'defect') {
+      try {
+        await fetch(`/api/tickets/${ticketId}/generate-report`, { method: 'POST' });
+      } catch {}
+    }
+
+    setSuccessMsg('Ticket erfolgreich erstellt!');
+    setTimeout(() => router.push('/backoffice/tickets'), 2000);
+    setLoading(false);
+  };
+
+  const inputClass = 'w-full h-11 px-3.5 rounded-lg border border-zinc-200 bg-white text-sm text-zinc-900 placeholder:text-zinc-400 transition-colors focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20';
+  const textareaClass = 'w-full px-3.5 py-2.5 rounded-lg border border-zinc-200 bg-white text-sm text-zinc-900 placeholder:text-zinc-400 transition-colors focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 min-h-[100px] resize-y';
+
+  // Loading state
+  if (!profile) {
+    return (
+      <main className="flex min-h-screen w-full items-center justify-center bg-zinc-50">
+        <Spinner className="h-8 w-8 text-indigo-500" />
+      </main>
     );
-  } catch (err) {
-    console.error('Erreur réseau IA', err);
   }
 
-  // 4) Success + reset
-  setSuccessMsg(
-    uploadedCount > 0
-      ? `Ticket erfolgreich erstellt. ${uploadedCount} Datei(en) hochgeladen.`
-      : 'Ticket erfolgreich erstellt.'
-  );
+  // TYPE SELECTION
+  if (!ticketType) {
+    return (
+      <main className="min-h-screen w-full bg-zinc-50 p-6">
+        <div className="mx-auto max-w-2xl">
 
-  setContactPhone('');
-  setTitle('');
-  setDescription('');
-  setArea('');
-  setDetailedLocation('');
-  setMainCategory('');
-  setCategories([]);
-  setPriority('medium');
-  setAccessRequired(null);
-  setAccessTimeWindow('');
-  setAccessInstructions('');
-  setAttachmentsDescription('');
-  setExtraContactInfo('');
-  setFiles([]);
-
-  setLoading(false);
-
-  setTimeout(() => {
-    router.push('/dashboard');
-  }, 1200);
-};
-
-
-  return (
-    <main className="min-h-screen w-full bg-gray-100 flex items-start justify-center p-6 text-gray-900">
-      {editingFileIndex !== null && (
-        <ImageEditorModal file={files[editingFileIndex]} onSave={saveEditedFile} onClose={() => setEditingFileIndex(null)} />
-      )}
-
-      <div className="w-full max-w-3xl bg-white rounded-xl shadow-sm border border-gray-300 p-8 space-y-8">
-        <header className="border-b border-gray-200 pb-4">
-          <h1 className="text-3xl font-semibold text-gray-900">Neues Ticket — Admin</h1>
-          <p className="text-sm text-gray-600 mt-2">
-            Ticket als Admin erstellen (Odoo Tenancy + Partner ID sichtbar).
-          </p>
-        </header>
-
-        <form onSubmit={handleSubmit} className="space-y-8">
-          {/* --- 1. OBJEKT (ODOO) --- */}
-          <section className="bg-gray-50 p-5 rounded-xl border border-gray-200 space-y-3">
-            <h2 className="font-semibold text-lg text-gray-900">1. Betroffenes Objekt</h2>
-
+          {/* Header */}
+          <div className="mb-10 flex items-center gap-4">
+            <button
+              onClick={() => router.push('/dashboard')}
+              className="flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-200 text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
+            >
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+              </svg>
+            </button>
             <div>
-              <label className="block text-sm font-medium text-gray-900 mb-1">Suche (Client-side)</label>
-              <input
-                type="text"
-                value={tenancySearch}
-                onChange={(e) => setTenancySearch(e.target.value)}
-                className="w-full rounded-lg border-gray-300 bg-white text-gray-900 shadow-sm focus:border-black focus:ring-black px-3 py-2"
-                placeholder="z.B. Name, Stadt, Straße, ID…"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Angezeigt: {filteredTenancies.length} / {tenancies.length}
-              </p>
+              <h1 className="text-2xl font-semibold text-zinc-900">Ticket für Mieter erstellen</h1>
+              <p className="text-sm text-zinc-500">Wählen Sie den Tickettyp</p>
             </div>
+          </div>
 
+          {/* Type Cards */}
+          <div className="grid gap-4">
+
+            {/* Defect */}
+            <button
+              onClick={() => setTicketType('defect')}
+              className="group rounded-2xl border border-zinc-200 bg-white p-6 text-left shadow-sm transition-all hover:border-indigo-500 hover:shadow-md"
+            >
+              <div className="flex items-start gap-4">
+                <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 transition-colors group-hover:bg-indigo-100">
+                  <svg className="h-6 w-6 text-indigo-600" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008z" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <h2 className="mb-1 text-lg font-semibold text-zinc-900">Mangelmeldung</h2>
+                  <p className="mb-3 text-sm text-zinc-500">Technischer Defekt, Schaden, Reparaturbedarf</p>
+                  <ul className="space-y-1 text-xs text-zinc-400">
+                    <li>• Detaillierte Kategorisierung</li>
+                    <li>• Zugangsinfos & Kontaktdaten</li>
+                    <li>• KI-gestützte Analyse</li>
+                  </ul>
+                </div>
+                <svg className="h-5 w-5 text-zinc-300 transition-all group-hover:translate-x-1 group-hover:text-indigo-500" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                </svg>
+              </div>
+            </button>
+
+            {/* Request */}
+            <button
+              onClick={() => setTicketType('request')}
+              className="group rounded-2xl border border-zinc-200 bg-white p-6 text-left shadow-sm transition-all hover:border-indigo-500 hover:shadow-md"
+            >
+              <div className="flex items-start gap-4">
+                <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 transition-colors group-hover:bg-indigo-100">
+                  <svg className="h-6 w-6 text-indigo-600" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <h2 className="mb-1 text-lg font-semibold text-zinc-900">Allgemeine Anfrage</h2>
+                  <p className="mb-3 text-sm text-zinc-500">Dokument, Bescheinigung, Frage</p>
+                  <ul className="space-y-1 text-xs text-zinc-400">
+                    <li>• Schnelles Formular</li>
+                    <li>• Ohne technische Details</li>
+                    <li>• Für einfache Anliegen</li>
+                  </ul>
+                </div>
+                <svg className="h-5 w-5 text-zinc-300 transition-all group-hover:translate-x-1 group-hover:text-indigo-500" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                </svg>
+              </div>
+            </button>
+
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  // FORM
+  return (
+    <main className="min-h-screen w-full bg-zinc-50 p-6">
+      <div className="mx-auto max-w-2xl">
+
+        {/* Header */}
+        <div className="mb-8 flex items-center gap-4">
+          <button
+            onClick={() => setTicketType(null)}
+            className="flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-200 text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
+          >
+            <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+            </svg>
+          </button>
+          <div>
+            <h1 className="text-2xl font-semibold text-zinc-900">
+              {ticketType === 'defect' ? 'Mangelmeldung' : 'Allgemeine Anfrage'}
+            </h1>
+            <p className="text-sm text-zinc-500">Ticket im Namen des Mieters erstellen</p>
+          </div>
+        </div>
+
+        {/* Image Editor Modal */}
+        {editingFileIndex !== null && files[editingFileIndex] && (
+          <ImageEditorModal
+            file={files[editingFileIndex]}
+            onSave={saveEditedFile}
+            onClose={() => setEditingFileIndex(null)}
+          />
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-6">
+
+          {/* Tenancy Selection */}
+          <div>
+            <label className="mb-2 block text-sm font-medium text-zinc-700">
+              Mieteinheit auswählen <span className="text-indigo-600">*</span>
+            </label>
+            <input
+              type="text"
+              placeholder="Suchen..."
+              value={tenancySearch}
+              onChange={(e) => setTenancySearch(e.target.value)}
+              className={`${inputClass} mb-2`}
+            />
             {loadingTenancies ? (
-              <p className="text-sm text-gray-500 animate-pulse">Lade Objekte...</p>
-            ) : filteredTenancies.length > 0 ? (
-              <div>
-                <label className="block text-sm font-medium text-gray-900 mb-1">
-                  Bitte wählen Sie die Mieteinheit *
-                </label>
-                <select
-                  value={selectedTenancyId}
-                  onChange={(e) => setSelectedTenancyId(e.target.value)}
-                  className="w-full rounded-lg border-gray-300 bg-white text-gray-900 shadow-sm focus:border-black focus:ring-black px-3 py-2"
-                  required
-                >
-                  <option value="">-- Bitte wählen --</option>
-                  {filteredTenancies.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
+              <div className="flex items-center gap-2 text-sm text-zinc-500">
+                <Spinner className="h-4 w-4 text-indigo-500" />
+                Wird geladen...
+              </div>
+            ) : (
+              <select
+                value={selectedTenancyId}
+                onChange={(e) => setSelectedTenancyId(e.target.value)}
+                className={inputClass}
+                required
+              >
+                <option value="">Bitte wählen...</option>
+                {filteredTenancies.map((t) => (
+                  <option key={t.id} value={String(t.id)}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
 
-                {selectedTenancy && (
-                  <div className="mt-3 rounded-lg border border-gray-200 bg-white p-3 text-xs text-gray-700 space-y-1">
-                    <div>
-                      <span className="font-semibold">Tenancy ID (Odoo):</span> {selectedTenancy.id}
-                    </div>
-                    <div>
-                      <span className="font-semibold">Tenant Partner ID (Odoo res.partner):</span>{' '}
-                      {selectedTenancy.tenant_partner_id ?? '—'}
-                    </div>
-                    <div>
-                      <span className="font-semibold">Tenant Partner Name:</span>{' '}
-                      {selectedTenancy.tenant_partner_name ?? '—'}
-                    </div>
-                    <div>
-                      <span className="font-semibold">Entity:</span> {selectedTenancy.entity_name ?? '—'} (
-                      {selectedTenancy.entity_id ?? '—'})
-                    </div>
-                    <div>
-                      <span className="font-semibold">Company:</span> {selectedTenancy.property_company ?? '—'}
-                    </div>
+          {/* Request: Category */}
+          {ticketType === 'request' && (
+            <div>
+              <label className="mb-2 block text-sm font-medium text-zinc-700">Kategorie</label>
+              <div className="grid grid-cols-2 gap-2">
+                {REQUEST_CATEGORIES.map((cat) => (
+                  <button
+                    key={cat.key}
+                    type="button"
+                    onClick={() => setRequestCategory(cat.key)}
+                    className={cn(
+                      'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+                      requestCategory === cat.key
+                        ? 'border-indigo-500 bg-indigo-50'
+                        : 'border-zinc-200 hover:border-zinc-300'
+                    )}
+                  >
+                    <svg className={cn('h-5 w-5', requestCategory === cat.key ? 'text-indigo-600' : 'text-zinc-400')} fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d={cat.icon} />
+                    </svg>
+                    <span className={cn('text-sm font-medium', requestCategory === cat.key ? 'text-indigo-700' : 'text-zinc-700')}>
+                      {cat.label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Defect: Category */}
+          {ticketType === 'defect' && (
+            <div>
+              <label className="mb-2 block text-sm font-medium text-zinc-700">Kategorie</label>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {MAIN_CATEGORIES.map((cat) => (
+                  <button
+                    key={cat.key}
+                    type="button"
+                    onClick={() => setMainCategory(cat.key)}
+                    className={cn(
+                      'rounded-lg border-2 p-3 text-center transition-all',
+                      mainCategory === cat.key
+                        ? 'border-indigo-500 bg-indigo-50'
+                        : 'border-zinc-200 hover:border-zinc-300'
+                    )}
+                  >
+                    <svg className={cn('mx-auto mb-1 h-5 w-5', mainCategory === cat.key ? 'text-indigo-600' : 'text-zinc-400')} fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d={cat.icon} />
+                    </svg>
+                    <span className={cn('text-xs font-medium', mainCategory === cat.key ? 'text-indigo-700' : 'text-zinc-600')}>
+                      {cat.label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Title */}
+          <div>
+            <label className="mb-2 block text-sm font-medium text-zinc-700">Betreff <span className="text-indigo-600">*</span></label>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Kurze Beschreibung des Anliegens"
+              className={inputClass}
+              required
+            />
+          </div>
+
+          {/* Description */}
+          <div>
+            <label className="mb-2 block text-sm font-medium text-zinc-700">Beschreibung</label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Detaillierte Beschreibung..."
+              className={textareaClass}
+            />
+          </div>
+
+          {/* Defect specific fields */}
+          {ticketType === 'defect' && (
+            <>
+              {/* Contact */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-zinc-700">Telefon</label>
+                  <input
+                    type="tel"
+                    value={contactPhone}
+                    onChange={(e) => setContactPhone(e.target.value)}
+                    placeholder="+49..."
+                    className={inputClass}
+                  />
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-zinc-700">E-Mail</label>
+                  <input
+                    type="email"
+                    value={contactEmail}
+                    onChange={(e) => setContactEmail(e.target.value)}
+                    className={inputClass}
+                  />
+                </div>
+              </div>
+
+              {/* Location */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-zinc-700">Gebäudeteil</label>
+                  <input
+                    type="text"
+                    value={area}
+                    onChange={(e) => setArea(e.target.value)}
+                    placeholder="z.B. Erdgeschoss, Lager"
+                    className={inputClass}
+                  />
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-zinc-700">Genaue Position</label>
+                  <input
+                    type="text"
+                    value={detailedLocation}
+                    onChange={(e) => setDetailedLocation(e.target.value)}
+                    placeholder="z.B. Eingangsbereich links"
+                    className={inputClass}
+                  />
+                </div>
+              </div>
+
+              {/* Access */}
+              <div>
+                <label className="mb-2 block text-sm font-medium text-zinc-700">Zugang erforderlich?</label>
+                <div className="flex gap-4">
+                  <button
+                    type="button"
+                    onClick={() => setAccessRequired(true)}
+                    className={cn(
+                      'flex-1 rounded-lg border-2 py-2 font-medium transition-all',
+                      accessRequired === true ? 'border-indigo-500 bg-indigo-50 text-indigo-600' : 'border-zinc-200 text-zinc-500 hover:border-zinc-300'
+                    )}
+                  >
+                    Ja
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAccessRequired(false)}
+                    className={cn(
+                      'flex-1 rounded-lg border-2 py-2 font-medium transition-all',
+                      accessRequired === false ? 'border-indigo-500 bg-indigo-50 text-indigo-600' : 'border-zinc-200 text-zinc-500 hover:border-zinc-300'
+                    )}
+                  >
+                    Nein
+                  </button>
+                </div>
+                {accessRequired && (
+                  <div className="mt-3 space-y-3">
+                    <input
+                      type="text"
+                      value={accessTimeWindow}
+                      onChange={(e) => setAccessTimeWindow(e.target.value)}
+                      placeholder="Zeitfenster (z.B. Mo-Fr 9-17 Uhr)"
+                      className={inputClass}
+                    />
+                    <input
+                      type="text"
+                      value={accessInstructions}
+                      onChange={(e) => setAccessInstructions(e.target.value)}
+                      placeholder="Zugangshinweise"
+                      className={inputClass}
+                    />
                   </div>
                 )}
               </div>
-            ) : (
-              <div className="text-sm text-amber-700 font-medium">Keine Objekte gefunden.</div>
-            )}
-          </section>
 
-          {/* --- 2. KONTAKTDATEN --- */}
-          <section className="space-y-4">
-            <h2 className="font-semibold text-lg text-gray-900 border-b border-gray-200 pb-2">2. Kontaktdaten</h2>
-            <div className="grid md:grid-cols-2 gap-5">
+              {/* Priority */}
               <div>
-                <label className="block text-sm font-medium text-gray-900 mb-1">Telefonnummer</label>
-                <input
-                  type="text"
-                  className="w-full rounded-lg border-gray-300 bg-white text-gray-900 shadow-sm focus:border-black focus:ring-black px-3 py-2"
-                  value={contactPhone}
-                  onChange={(e) => setContactPhone(e.target.value)}
-                  placeholder="+49..."
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-900 mb-1">E-Mail Adresse</label>
-                <input
-                  type="email"
-                  className="w-full rounded-lg border-gray-300 bg-white text-gray-900 shadow-sm focus:border-black focus:ring-black px-3 py-2"
-                  value={contactEmail}
-                  onChange={(e) => setContactEmail(e.target.value)}
-                  placeholder="name@firma.de"
-                />
-              </div>
-            </div>
-          </section>
-
-          {/* --- 3. ZUGANG --- */}
-          <section className="space-y-4">
-            <h2 className="font-semibold text-lg text-gray-900 border-b border-gray-200 pb-2">3. Verfügbarkeit & Zugang</h2>
-
-            <div className="space-y-4">
-              <div>
-                <p className="text-sm font-medium text-gray-900 mb-2">Ist Zugang zur Mietfläche erforderlich?</p>
-                <div className="flex gap-6">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="access_required"
-                      checked={accessRequired === true}
-                      onChange={() => setAccessRequired(true)}
-                      className="text-black focus:ring-black"
-                    />
-                    <span className="text-gray-900">Ja</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="access_required"
-                      checked={accessRequired === false}
-                      onChange={() => setAccessRequired(false)}
-                      className="text-black focus:ring-black"
-                    />
-                    <span className="text-gray-900">Nein</span>
-                  </label>
-                </div>
-              </div>
-
-              {accessRequired !== false && (
-                <div className="grid md:grid-cols-1 gap-4 bg-gray-50 p-4 rounded-xl border border-gray-200">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-900 mb-1">Zeitfenster für Zugang</label>
-                    <input
-                      type="text"
-                      className="w-full rounded-lg border-gray-300 bg-white text-gray-900 shadow-sm focus:border-black focus:ring-black px-3 py-2"
-                      value={accessTimeWindow}
-                      onChange={(e) => setAccessTimeWindow(e.target.value)}
-                      placeholder="z. B. Mo–Fr 8:00–12:00"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-900 mb-1">
-                      Zutrittsregelungen / Schlüssel / Ansprechpartner vor Ort
-                    </label>
-                    <textarea
-                      className="w-full rounded-lg border-gray-300 bg-white text-gray-900 shadow-sm focus:border-black focus:ring-black px-3 py-2 min-h-[60px]"
-                      value={accessInstructions}
-                      onChange={(e) => setAccessInstructions(e.target.value)}
-                      placeholder="z.B. Schlüssel beim Empfang, rufen Sie Frau Müller an..."
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          </section>
-
-          {/* --- 4. BESCHREIBUNG --- */}
-          <section className="space-y-4">
-            <h2 className="font-semibold text-lg text-gray-900 border-b border-gray-200 pb-2">4. Beschreibung des Mangels</h2>
-            <div>
-              <label className="block text-sm font-medium text-gray-900 mb-1">Titel / Kurzerfassung *</label>
-              <input
-                type="text"
-                className="w-full rounded-lg border-gray-300 bg-white text-gray-900 shadow-sm focus:border-black focus:ring-black px-3 py-2"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                required
-                placeholder="z.B. Heizungsausfall im Showroom"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-900 mb-1">
-                Ausführliche Beschreibung *
-                <span className="block text-xs text-gray-500 font-normal mt-0.5">(Was? Wo genau? Seit wann? Welche Auswirkungen?)</span>
-              </label>
-              <textarea
-                className="w-full rounded-lg border-gray-300 bg-white text-gray-900 shadow-sm focus:border-black focus:ring-black px-3 py-2 min-h-[120px]"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                required
-              />
-            </div>
-          </section>
-
-          {/* --- 5. LAGE --- */}
-          <section className="space-y-4">
-            <h2 className="font-semibold text-lg text-gray-900 border-b border-gray-200 pb-2">5. Lage des Mangels</h2>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-900 mb-1">Bereich *</label>
-                <select
-                  className="w-full rounded-lg border-gray-300 bg-white text-gray-900 shadow-sm focus:border-black focus:ring-black px-3 py-2"
-                  value={area}
-                  onChange={(e) => setArea(e.target.value)}
-                  required
-                >
-                  <option value="">-- Bitte wählen --</option>
-                  <option value="Verkaufsfläche (Showroom)">Verkaufsfläche (Showroom)</option>
-                  <option value="Schaufenster / Fassade">Schaufenster / Fassade</option>
-                  <option value="Eingangsbereich / Automatiktüren">Eingangsbereich / Automatiktüren</option>
-                  <option value="Lager / Warenannahme">Lager / Warenannahme</option>
-                  <option value="Personalräume / Büro / Küche">Personalräume / Büro / Küche</option>
-                  <option value="Sanitäranlagen (Kunden)">Sanitäranlagen (Kunden)</option>
-                  <option value="Sanitäranlagen (Personal)">Sanitäranlagen (Personal)</option>
-                  <option value="Parkplatz / Außenbereich">Parkplatz / Außenbereich</option>
-                  <option value="Technikraum / Keller">Technikraum / Keller</option>
-                  <option value="Dach">Dach</option>
-                  <option value="Sonstige">Sonstiges</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-900 mb-1">
-                  Detaillierte Ortsangabe
-                  <span className="block text-xs text-gray-500 font-normal mt-0.5">
-                    Bitte beschreiben Sie die genaue Stelle (z.B. &quot;Über Kasse 2&quot;, &quot;Damen-WC Kabine links&quot;, &quot;Laderampe Tor 3&quot;).
-                  </span>
-                </label>
-                <textarea
-                  className="w-full rounded-lg border-gray-300 bg-white text-gray-900 shadow-sm focus:border-black focus:ring-black px-3 py-2 min-h-[60px]"
-                  value={detailedLocation}
-                  onChange={(e) => setDetailedLocation(e.target.value)}
-                  placeholder="z. B. Über Kasse 2, linke Kabine, Laderampe Tor 3..."
-                />
-              </div>
-            </div>
-          </section>
-
-          {/* --- 6. KATEGORIE --- */}
-          <section className="space-y-4">
-            <h2 className="font-semibold text-lg text-gray-900 border-b border-gray-200 pb-2">6. Was ist betroffen? (Kategorie-Auswahl)</h2>
-            <p className="text-xs text-gray-600">Wählen Sie zuerst die passende Kategorie aus. Danach können Sie das konkrete Problem auswählen.</p>
-
-            <div className="space-y-4 bg-gray-50 p-5 rounded-xl border border-gray-200 text-sm">
-              <div>
-                <label className="block text-sm font-medium text-gray-900 mb-1">Hauptkategorie *</label>
-                <select
-                  className="w-full rounded-lg border-gray-300 bg-white text-gray-900 shadow-sm focus:border-black focus:ring-black px-3 py-2"
-                  value={mainCategory}
-                  onChange={(e) => {
-                    setMainCategory(e.target.value);
-                    setCategories([]);
-                  }}
-                  required
-                >
-                  <option value="">-- Bitte wählen --</option>
-                  {MAIN_CATEGORIES.map((cat) => (
-                    <option key={cat.key} value={cat.key}>
-                      {cat.label}
-                    </option>
+                <label className="mb-2 block text-sm font-medium text-zinc-700">Dringlichkeit</label>
+                <div className="flex gap-2">
+                  {[
+                    { key: 'low', label: 'Niedrig' },
+                    { key: 'medium', label: 'Normal' },
+                    { key: 'high', label: 'Hoch' },
+                  ].map((p) => (
+                    <button
+                      key={p.key}
+                      type="button"
+                      onClick={() => setPriority(p.key as Priority)}
+                      className={cn(
+                        'flex-1 rounded-lg border-2 py-2 font-medium transition-all',
+                        priority === p.key
+                          ? p.key === 'high'
+                            ? 'border-red-500 bg-red-50 text-red-600'
+                            : p.key === 'medium'
+                            ? 'border-indigo-500 bg-indigo-50 text-indigo-600'
+                            : 'border-zinc-400 bg-zinc-50 text-zinc-700'
+                          : 'border-zinc-200 text-zinc-400 hover:border-zinc-300'
+                      )}
+                    >
+                      {p.label}
+                    </button>
                   ))}
-                </select>
-              </div>
-
-              {mainCategory ? (
-                <div className="border-t border-gray-200 pt-4">
-                  <p className="font-semibold text-gray-900 mb-2">Konkretes Problem</p>
-                  <p className="text-xs text-gray-500 mb-2">Sie können mehrere Optionen auswählen, falls mehrere Punkte betroffen sind.</p>
-
-                  <div className="grid md:grid-cols-2 gap-2 pl-1">
-                    {(SUBCATEGORY_OPTIONS[mainCategory] || []).map(([value, label]) => (
-                      <label key={value} className="flex items-center gap-2 cursor-pointer hover:bg-gray-100 p-1.5 rounded transition">
-                        <input
-                          type="checkbox"
-                          checked={categories.includes(value)}
-                          onChange={() => toggleCategory(value)}
-                          className="rounded border-gray-400 text-black focus:ring-black"
-                        />
-                        <span className="text-gray-800">{label}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <p className="text-xs text-gray-500">Bitte wählen Sie zuerst eine Hauptkategorie aus.</p>
-              )}
-            </div>
-          </section>
-
-          {/* --- 7. DRINGLICHKEIT --- */}
-          <section className="space-y-4">
-            <h2 className="font-semibold text-lg text-gray-900 border-b border-gray-200 pb-2">7. Betriebsrelevanz / Dringlichkeit</h2>
-            <div className="space-y-3 text-sm bg-gray-50 p-5 rounded-xl border border-gray-200">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name="priority"
-                  checked={priority === 'high'}
-                  onChange={() => setPriority('high')}
-                  className="text-red-600 focus:ring-red-600"
-                />
-                <span className="font-bold text-red-700">Hoch – Geschäftsbetrieb erheblich gestört oder Sicherheitsrisiko</span>
-              </label>
-
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name="priority"
-                  checked={priority === 'medium'}
-                  onChange={() => setPriority('medium')}
-                  className="text-black focus:ring-black"
-                />
-                <span className="text-gray-900">Mittel – Funktionseinschränkung, Betrieb aber möglich</span>
-              </label>
-
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name="priority"
-                  checked={priority === 'low'}
-                  onChange={() => setPriority('low')}
-                  className="text-black focus:ring-black"
-                />
-                <span className="text-gray-900">Niedrig – optischer Mangel / kein Einfluss auf Betrieb</span>
-              </label>
-            </div>
-          </section>
-
-          {/* --- 8. UPLOADS --- */}
-          <section className="space-y-4">
-            <h2 className="font-semibold text-lg text-gray-900 border-b border-gray-200 pb-2">8. Anlagen / Uploads</h2>
-
-            <div className="bg-blue-50 border-l-4 border-blue-600 p-4 rounded-r-lg shadow-sm">
-              <div className="flex items-start">
-                <div className="flex-shrink-0">
-                  <svg className="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-                <div className="ml-3 text-sm text-blue-900">
-                  <p className="font-bold mb-1">Wichtige Foto-Hinweise:</p>
-                  <ul className="list-disc list-inside space-y-1 text-blue-800">
-                    <li>
-                      Bitte machen Sie mindestens ein <strong>Gesamtfoto</strong> (Raum) und ein <strong>Detailfoto</strong> (Schaden).
-                    </li>
-                    <li>Fotografieren Sie bitte das <strong>Typenschild (Plakette)</strong> oder Wartungsaufkleber am Gerät/Anlage, falls vorhanden.</li>
-                  </ul>
                 </div>
               </div>
-            </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-900 mb-1">Beschreibung der Fotos / Dateien</label>
-              <textarea
-                className="w-full rounded-lg border-gray-300 bg-white text-gray-900 shadow-sm focus:border-black focus:ring-black px-3 py-2 min-h-[60px]"
-                value={attachmentsDescription}
-                onChange={(e) => setAttachmentsDescription(e.target.value)}
-                placeholder="Beschreiben Sie hier kurz, was auf den Bildern zu sehen ist..."
-              />
-            </div>
+              {/* Extra notes */}
+              <div>
+                <label className="mb-2 block text-sm font-medium text-zinc-700">Weitere Hinweise</label>
+                <textarea
+                  value={extraNotes}
+                  onChange={(e) => setExtraNotes(e.target.value)}
+                  placeholder="Sonstige Anmerkungen..."
+                  className={textareaClass}
+                />
+              </div>
+            </>
+          )}
 
-            <div
-              className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center transition ${
-                files.length === 0 ? 'border-red-300 bg-red-50' : 'border-gray-300 bg-gray-50 hover:bg-gray-100'
-              }`}
-            >
-              <div className="flex flex-col sm:flex-row gap-4 w-full justify-center items-center">
-                <label className="cursor-pointer bg-black text-white px-5 py-3 rounded-lg shadow-md hover:bg-gray-800 active:scale-95 transition flex items-center gap-2">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+          {/* Files */}
+          <div>
+            <label className="mb-2 block text-sm font-medium text-zinc-700">Anhänge</label>
+            <div className="rounded-xl border-2 border-dashed border-zinc-200 p-6 text-center">
+              <div className="flex flex-col justify-center gap-3 sm:flex-row">
+                <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-zinc-900 px-4 py-2 font-medium text-white transition-colors hover:bg-zinc-800">
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM18.75 10.5h.008v.008h-.008V10.5z" />
                   </svg>
-                  <span>Foto aufnehmen</span>
+                  Foto
                   <input type="file" accept="image/*" capture="environment" onChange={handleFilesChange} className="hidden" />
                 </label>
-
-                <label className="cursor-pointer bg-white border border-gray-300 text-gray-700 px-5 py-3 rounded-lg shadow-sm hover:bg-gray-50 active:scale-95 transition flex items-center gap-2">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 px-4 py-2 font-medium text-zinc-900 transition-colors hover:bg-zinc-50">
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
                   </svg>
-                  <span>Dateien auswählen</span>
+                  Dateien
                   <input type="file" multiple onChange={handleFilesChange} className="hidden" />
                 </label>
               </div>
-
-              <p className="text-xs text-gray-500 mt-4">(Alle Dateitypen erlaubt: Bilder, Videos, PDF...)</p>
             </div>
 
             {files.length > 0 && (
-              <div className="space-y-2 bg-white p-3 rounded-lg border border-gray-200">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Ausgewählte Dateien ({files.length})</p>
+              <div className="mt-3 space-y-2">
                 {files.map((file, index) => (
-                  <div key={index} className="flex items-center justify-between bg-gray-50 p-2 rounded text-sm group">
-                    <div className="flex items-center gap-3 overflow-hidden">
-                      <span className="truncate text-gray-700 font-medium">{file.name}</span>
-                      <span className="text-xs text-gray-400">({(file.size / 1024 / 1024).toFixed(2)} MB)</span>
-                    </div>
-
+                  <div key={index} className="flex items-center justify-between rounded-lg bg-zinc-50 p-3">
+                    <span className="truncate text-sm text-zinc-700">{file.name}</span>
                     <div className="flex items-center gap-2">
                       {file.type.startsWith('image/') && (
                         <button
                           type="button"
                           onClick={() => startEditing(index)}
-                          className="text-xs bg-gray-200 hover:bg-gray-300 text-gray-800 px-2 py-1 rounded transition flex items-center gap-1"
+                          className="text-xs font-medium text-indigo-600 hover:text-indigo-500"
                         >
-                          ✎ Markieren
+                          Markieren
                         </button>
                       )}
                       <button
                         type="button"
                         onClick={() => removeFile(index)}
-                        className="text-red-500 hover:text-red-700 font-bold px-2 py-1 hover:bg-red-50 rounded transition"
-                        title="Entfernen"
+                        className="text-zinc-400 transition-colors hover:text-red-500"
                       >
-                        ✕
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
                       </button>
                     </div>
                   </div>
                 ))}
               </div>
             )}
+          </div>
 
-            {files.length === 0 && (
-              <div className="rounded-lg bg-red-100 border-l-4 border-red-600 p-4 mt-2 animate-pulse">
-                <div className="flex">
-                  <div className="flex-shrink-0">
-                    <svg className="h-5 w-5 text-red-600" viewBox="0 0 20 20" fill="currentColor">
-                      <path
-                        fillRule="evenodd"
-                        d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
-                  </div>
-                  <div className="ml-3">
-                    <h3 className="text-sm font-bold text-red-800 uppercase">Achtung: Keine Dateien!</h3>
-                    <div className="mt-1 text-sm text-red-700 font-semibold">
-                      Ohne Fotos, Videos oder Dokumente können wir Ihre Anfrage möglicherweise nicht effizient oder gar nicht bearbeiten.
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </section>
-
-          {/* --- 9. HINWEISE --- */}
-          <section className="space-y-4">
-            <h2 className="font-semibold text-lg text-gray-900 border-b border-gray-200 pb-2">9. Weitere Hinweise</h2>
-            <textarea
-              className="w-full rounded-lg border-gray-300 bg-white text-gray-900 shadow-sm focus:border-black focus:ring-black px-3 py-2 min-h-[80px]"
-              value={extraContactInfo}
-              onChange={(e) => setExtraContactInfo(e.target.value)}
-              placeholder="Sonstige Anmerkungen..."
-            />
-          </section>
-
+          {/* Messages */}
           {errorMsg && (
-            <div className="p-4 bg-red-50 text-red-900 border border-red-200 rounded-lg text-sm font-medium whitespace-pre-line">
+            <div className="rounded-lg border border-red-100 bg-red-50 p-4 text-sm text-red-700">
               {errorMsg}
             </div>
           )}
           {successMsg && (
-            <div className="p-4 bg-green-50 text-green-900 border border-green-200 rounded-lg text-sm font-medium text-center">
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-center text-sm text-emerald-700">
               {successMsg}
-              <p className="text-xs text-green-700 mt-1">Sie werden weitergeleitet...</p>
             </div>
           )}
 
-          <div className="flex justify-end pt-6 border-t border-gray-200">
-            <button
-              type="submit"
-              disabled={loading || !profile}
-              className="bg-gray-900 text-white px-8 py-3.5 rounded-xl font-medium shadow-md hover:bg-gray-800 transition transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-3 text-base"
-            >
-              {loading ? 'Wird erstellt...' : 'Ticket erstellen'}
-            </button>
-          </div>
+          {/* Submit */}
+          <Button type="submit" loading={loading} size="lg" className="w-full">
+            {loading ? 'Wird erstellt...' : 'Ticket erstellen'}
+          </Button>
+
         </form>
       </div>
     </main>

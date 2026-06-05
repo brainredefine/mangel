@@ -1,5 +1,8 @@
+// /app/api/tickets/[id]/send-pdf/route.ts
+
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '../../../../../lib/supabaseAdmin';
+import { getAdminUser } from '../../../../../lib/requireAdmin';
 import { PDFDocument, StandardFonts, rgb, Color } from 'pdf-lib';
 
 export const runtime = 'nodejs';
@@ -73,6 +76,13 @@ function wrapText(
 
 export async function GET(req: Request, context: RouteContext) {
   try {
+    // Internal Kostenschätzung — staff only. The middleware does not cover
+    // /api routes, so this handler must verify the caller itself.
+    const admin = await getAdminUser();
+    if (!admin) {
+      return NextResponse.json({ error: 'Nicht autorisiert' }, { status: 401 });
+    }
+
     const { id: ticketId } = await context.params;
 
     if (!ticketId) {

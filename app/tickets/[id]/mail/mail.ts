@@ -30,13 +30,15 @@ export async function buildSignedPhotoLinksText(
   if (filtered.length === 0) return '(Keine Fotos verfügbar)';
 
   const lines = await Promise.all(
-    filtered.map(async (att) => {
+    filtered.map(async (att, i) => {
       const { data, error } = await supabase.storage
         .from('ticket_attachments')
         .createSignedUrl(att.file_path, SIGNED_URL_TTL_SECONDS);
 
       if (error || !data?.signedUrl) return null;
-      return `- ${att.original_name}: ${data.signedUrl}`;
+      // mailto = texte brut → kein echter Hyperlink möglich; daher sauberes
+      // Label und die (lange) URL auf einer eigenen Zeile.
+      return `Foto ${i + 1} – ${att.original_name}:\n${data.signedUrl}`;
     })
   );
 

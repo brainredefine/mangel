@@ -1,4 +1,5 @@
 // app/tickets/[id]/actions.ts
+
 'use server';
 
 import {
@@ -6,11 +7,17 @@ import {
   fetchVendorsByReference,
   createServiceProviderInOdoo,
   partnerExistsInOdoo,
-  fetchOfferMailContext, // ✅ NEW
+  fetchOfferMailContext,
 } from '../../../lib/odooClient';
 import { supabaseAdmin } from '../../../lib/supabaseAdmin';
+import { getAdminUser } from '../../../lib/requireAdmin';
+import { notifyTenant } from '../../../lib/tenantMail';
+import { logActivity, type ActivityType } from '../../../lib/logActivity';
+import { buildOfferPdf } from '../../../lib/buildOfferPdf';
+import { buildOfferMail } from './mail/mailOffer';
 
-// Si tu veux garder le typage aligné avec page.tsx :
+// --- TYPES ---
+
 type ExternalVendor = {
   id: string;
   name: string;
@@ -25,27 +32,11 @@ type ExternalVendor = {
   source?: string | null;
 };
 
-export async function getOfferMailContextAction(tenancyId: number, tenantPartnerId: number) {
-  try {
-    const data = await fetchOfferMailContext({ tenancyId, tenantPartnerId });
-    return { success: true, data };
-  } catch (e: any) {
-    console.error('[getOfferMailContextAction] error', e);
-    return { success: false, error: e?.message ?? 'Unknown error' };
-  }
-}
-
+// --- BUILDING INFO ---
 
 export async function getBuildingInfoAction(tenancyId: number | string) {
   try {
     const id = Number(tenancyId);
-
-    console.log(
-      '[getBuildingInfoAction] raw tenancyId from client =',
-      tenancyId,
-      '-> parsed =',
-      id
-    );
 
     if (!id || Number.isNaN(id)) {
       console.warn('[getBuildingInfoAction] INVALID_ID', tenancyId);
@@ -66,35 +57,193 @@ export async function getBuildingInfoAction(tenancyId: number | string) {
   }
 }
 
+// --- OFFER MAIL CONTEXT ---
+
+export async function getOfferMailContextAction(tenancyId: number, tenantPartnerId: number) {
+  try {
+    const data = await fetchOfferMailContext({ tenancyId, tenantPartnerId });
+    return { success: true, data };
+  } catch (e: any) {
+    console.error('[getOfferMailContextAction] error', e);
+    return { success: false, error: e?.message ?? 'Unknown error' };
+  }
+}
+
+// --- TENANT NOTIFICATION (admin-triggered) ---
+
+export async function notifyTenantAction(ticketId: string, kind: 'status' | 'message') {
+  const admin = await getAdminUser();
+  if (!admin) return { sent: false, reason: 'unauthorized' };
+  return notifyTenant(ticketId, kind);
+}
+
+// --- ACTIVITY LOG (admin-triggered) ---
+
+export async function logTicketActivityAction(ticketId: string, type: ActivityType, detail?: string) {
+  const admin = await getAdminUser();
+  if (!admin) return { ok: false };
+
+  let actorName: string | null = admin.email ?? null;
+  const { data: prof } = await supabaseAdmin
+    .from('profiles')
+    .select('full_name')
+    .eq('id', admin.id)
+    .single();
+  if (prof?.full_name) actorName = prof.full_name;
+
+  await logActivity({ ticketId, type, detail, actorId: admin.id, actorName });
+  return { ok: true };
+}
+
+// --- PREPARE BEAUFTRAGUNG MAIL (PDF download + prefilled mailto — NOT sent) ---
+//
+// Returns the Beauftragung PDF (base64) plus recipient/subject/body. The client
+// downloads the PDF and opens a prefilled mailto; the admin attaches the PDF and
+// sends from their own mailbox — so the body sits above their Outlook signature
+// and the From is their own familiar address. Nothing is sent automatically.
+
+export async function prepareOfferMailAction(
+  ticketId: string,
+  vendorName: string,
+  vendorEmail: string
+) {
+  try {
+    const admin = await getAdminUser();
+    if (!admin) {
+      return { success: false as const, error: 'Nicht autorisiert.' };
+    }
+
+    const email = (vendorEmail || '').trim();
+    if (!email) {
+      return { success: false as const, error: 'Keine E-Mail-Adresse für diesen Dienstleister.' };
+    }
+
+    // Load the ticket fields needed for the Beauftragung
+    const { data: ticket, error: ticketError } = await supabaseAdmin
+      .from('tickets')
+      .select(
+        'id, title, description, beauftragungsumme, expected_enddate, odoo_tenancy_id, tenant_id, vendor_status, beauftragt_at, tracking_code, beauftragung_count'
+      )
+      .eq('id', ticketId)
+      .single();
+
+    if (ticketError || !ticket) {
+      return { success: false as const, error: 'Ticket nicht gefunden.' };
+    }
+
+    if (!ticket.odoo_tenancy_id) {
+      return { success: false as const, error: 'Keine Odoo-Mieter-ID am Ticket hinterlegt.' };
+    }
+
+    // Owner / tenant / building context from Odoo
+    const ctx = await fetchOfferMailContext({
+      tenancyId: Number(ticket.odoo_tenancy_id),
+      tenantPartnerId: Number(ticket.tenant_id),
+    });
+
+    const companyName = ctx?.building?.company_name ?? null;
+    const invoiceMailbox =
+      companyName === 'Fund IV'
+        ? 'inv-4@redefine.group'
+        : companyName === 'Eagle'
+        ? 'inv-eagle@redefine.group'
+        : 'inv@redefine.group';
+
+    // Subject location: "Straße, Stadt" (or Objekt-Label) — not a description summary
+    const b = ctx?.building;
+    const subjectLocation =
+      [b?.property_street, b?.property_city].filter(Boolean).join(', ').trim() ||
+      b?.objekt_label ||
+      null;
+
+    const newCount = (ticket.beauftragung_count ?? 0) + 1;
+    const beauftragungsNummer = `${ticket.tracking_code || ticketId.split('-')[0]}-${String(newCount).padStart(2, '0')}`;
+
+    const mail = buildOfferMail({
+      vendorEmail: email,
+      vendorName,
+      description: ticket.description || ticket.title || 'Maßnahme',
+      subjectLocation,
+      beauftragungsNummer,
+      ownerEntityName: ctx?.ownerEntity?.name ?? null,
+      ownerEntityAddress: ctx?.ownerEntity?.address ?? null,
+      ownerEntityVat: ctx?.ownerEntity?.vat ?? null,
+      tenantName: ctx?.tenant?.name ?? null,
+      tenantAddress: ctx?.tenant?.address ?? null,
+      tenantEmail: ctx?.tenant?.email ?? null,
+      tenantPhone: ctx?.tenant?.phone ?? null,
+      beauftragungsummeBrutto: ticket.beauftragungsumme ?? null,
+      dueDateText: ticket.expected_enddate
+        ? `schnellstmöglich, spätestens zum ${String(ticket.expected_enddate).slice(0, 10)}`
+        : null,
+      invoiceMailbox,
+    });
+
+    const pdfBytes = await buildOfferPdf({
+      subject: mail.subject,
+      body: mail.body,
+      vendorName,
+      beauftragungsNummer,
+    });
+    const pdfBase64 = Buffer.from(pdfBytes).toString('base64');
+    const shortId = ticketId.split('-')[0];
+
+    // Beauftragungs-Zähler hochzählen; Versand markiert den Dienstleister
+    // zudem als beauftragt (einmalig).
+    const updatePatch: Record<string, any> = { beauftragung_count: newCount };
+    let vendorStatus: string | null = ticket.vendor_status ?? null;
+    let beauftragtAt: string | null = ticket.beauftragt_at ?? null;
+    if (!vendorStatus) {
+      vendorStatus = 'commissioned';
+      beauftragtAt = new Date().toISOString();
+      updatePatch.vendor_status = vendorStatus;
+      updatePatch.beauftragt_at = beauftragtAt;
+    }
+    await supabaseAdmin.from('tickets').update(updatePatch).eq('id', ticketId);
+
+    await logActivity({
+      ticketId,
+      type: 'beauftragung',
+      detail: `Beauftragung an ${vendorName} vorbereitet`,
+      actorId: admin.id,
+      actorName: admin.email,
+    });
+
+    return {
+      success: true as const,
+      to: mail.to,
+      subject: mail.subject,
+      body: mail.coverNote,
+      pdfBase64,
+      pdfFilename: `Beauftragung_${shortId}.pdf`,
+      vendorStatus,
+      beauftragtAt,
+    };
+  } catch (err: any) {
+    console.error('[prepareOfferMailAction] error', err);
+    return { success: false as const, error: err?.message ?? 'Unbekannter Fehler.' };
+  }
+}
+
+// --- RECOMMENDED VENDORS (ODOO) ---
+
 export async function getRecommendedVendorsAction(tenancyId: number) {
   try {
     const buildingData = await fetchBuildingInfoByTenancy(tenancyId);
 
     if (!buildingData) {
-      console.warn(
-        '[getRecommendedVendorsAction] Aucun buildingData pour tenancyId =',
-        tenancyId
-      );
+      console.warn('[getRecommendedVendorsAction] No buildingData for tenancyId =', tenancyId);
       return { success: false, error: 'NO_BUILDING_DATA' };
     }
 
     const internalLabel = (buildingData as any).property_internal_label;
 
     if (!internalLabel) {
-      console.warn(
-        '[getRecommendedVendorsAction] Pas de internal_label trouvé pour ce bâtiment (tenancyId =',
-        tenancyId,
-        ')'
-      );
+      console.warn('[getRecommendedVendorsAction] No internal_label found for tenancyId =', tenancyId);
       return { success: false, error: 'NO_INTERNAL_LABEL' };
     }
 
-    console.log(
-      `Recherche prestataires Odoo avec catégories: 'Maintenance' + '${internalLabel}'`
-    );
-
     const vendors = await fetchVendorsByReference(internalLabel);
-
     return { success: true, data: vendors };
   } catch (err) {
     console.error('getRecommendedVendorsAction error', err);
@@ -102,15 +251,12 @@ export async function getRecommendedVendorsAction(tenancyId: number) {
   }
 }
 
-/**
- * Recherche de prestataires externes via Google Places Text Search.
- */
+// --- EXTERNAL VENDORS (GOOGLE PLACES) ---
+
 export async function searchExternalVendorsAction(searchPrompt: string) {
   try {
     const prompt = searchPrompt?.trim();
-    if (!prompt) {
-      return { success: false, error: 'EMPTY_PROMPT' };
-    }
+    if (!prompt) return { success: false, error: 'EMPTY_PROMPT' };
 
     const apiKey = process.env.GOOGLE_PLACES_API_KEY;
     if (!apiKey) {
@@ -121,8 +267,6 @@ export async function searchExternalVendorsAction(searchPrompt: string) {
     const MAX_QUERY_LEN = 512;
     const query = prompt.slice(0, MAX_QUERY_LEN);
 
-    console.log('[searchExternalVendorsAction] query =', query);
-
     const searchUrl = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(
       query
     )}&language=de&region=de&key=${apiKey}`;
@@ -131,38 +275,19 @@ export async function searchExternalVendorsAction(searchPrompt: string) {
 
     if (!searchResponse.ok) {
       const text = await searchResponse.text();
-      console.error(
-        '[searchExternalVendorsAction] Google Places HTTP error (search)',
-        searchResponse.status,
-        text
-      );
+      console.error('[searchExternalVendorsAction] Google Places HTTP error', searchResponse.status, text);
       return { success: false, error: 'GOOGLE_PLACES_HTTP_ERROR' };
     }
 
     const searchJson = (await searchResponse.json()) as any;
 
-    console.log(
-      '[searchExternalVendorsAction] Google Places SEARCH status =',
-      searchJson.status
-    );
-
     if (searchJson.status !== 'OK' && searchJson.status !== 'ZERO_RESULTS') {
-      console.error(
-        '[searchExternalVendorsAction] Google Places SEARCH non-OK status:',
-        searchJson.status,
-        searchJson.error_message
-      );
-      return {
-        success: false,
-        error: searchJson.status || 'GOOGLE_PLACES_SEARCH_ERROR',
-      };
+      console.error('[searchExternalVendorsAction] Google Places non-OK status:', searchJson.status);
+      return { success: false, error: searchJson.status || 'GOOGLE_PLACES_SEARCH_ERROR' };
     }
 
     const results = Array.isArray(searchJson.results) ? searchJson.results : [];
-
-    if (!results.length) {
-      return { success: true, data: [], usedPrompt: query };
-    }
+    if (!results.length) return { success: true, data: [], usedPrompt: query };
 
     const MAX_DETAIL_RESULTS = 8;
     const subset = results.slice(0, MAX_DETAIL_RESULTS);
@@ -179,8 +304,9 @@ export async function searchExternalVendorsAction(searchPrompt: string) {
       let phone: string | null = null;
       let website: string | null = null;
       let email: string | null = null;
-      let mapsUrl: string | null =
-        placeId ? `https://www.google.com/maps/place/?q=place_id:${placeId}` : null;
+      let mapsUrl: string | null = placeId
+        ? `https://www.google.com/maps/place/?q=place_id:${placeId}`
+        : null;
 
       if (placeId) {
         try {
@@ -198,39 +324,19 @@ export async function searchExternalVendorsAction(searchPrompt: string) {
               phone = d.formatted_phone_number || d.international_phone_number || null;
               website = d.website || null;
               if (d.url) mapsUrl = d.url;
-            } else {
-              console.warn(
-                '[searchExternalVendorsAction] Details status not OK for placeId',
-                placeId,
-                detailsJson.status,
-                detailsJson.error_message
-              );
             }
-          } else {
-            console.warn(
-              '[searchExternalVendorsAction] Details HTTP error for placeId',
-              placeId,
-              detailsResponse.status
-            );
           }
         } catch (detailsErr) {
-          console.error(
-            '[searchExternalVendorsAction] Details fetch error for placeId',
-            placeId,
-            detailsErr
-          );
+          console.error('[searchExternalVendorsAction] Details fetch error', placeId, detailsErr);
         }
       }
 
+      // Try to extract email from website
       if (website) {
         try {
           email = await extractEmailFromWebsite(website);
         } catch (scrapeErr) {
-          console.error(
-            '[searchExternalVendorsAction] Error scraping email for website',
-            website,
-            scrapeErr
-          );
+          console.error('[searchExternalVendorsAction] Error scraping email', website, scrapeErr);
         }
       }
 
@@ -249,11 +355,11 @@ export async function searchExternalVendorsAction(searchPrompt: string) {
       });
     }
 
+    // Sort by rating
     detailedVendors.sort((a, b) => {
       const ra = a.rating ?? 0;
       const rb = b.rating ?? 0;
       if (rb !== ra) return rb - ra;
-
       const ca = a.reviewCount ?? 0;
       const cb = b.reviewCount ?? 0;
       return cb - ca;
@@ -266,11 +372,11 @@ export async function searchExternalVendorsAction(searchPrompt: string) {
   }
 }
 
-// Petit helper pour essayer d'extraire un email depuis un site web
+// --- HELPER: Extract email from website ---
+
 async function extractEmailFromWebsite(websiteUrl: string): Promise<string | null> {
   try {
     const tried = new Set<string>();
-
     const urlObj = new URL(websiteUrl);
     const origin = urlObj.origin;
 
@@ -295,29 +401,25 @@ async function extractEmailFromWebsite(websiteUrl: string): Promise<string | nul
         const html = await res.text();
         const matches = html.match(emailRegex);
         if (matches && matches.length > 0) {
-          const email = matches[0];
-          console.log('[extractEmailFromWebsite] Found email', email, 'on', url);
-          return email;
+          return matches[0];
         }
-      } catch (err) {
-        console.warn('[extractEmailFromWebsite] Error fetching', url, err);
+      } catch {
+        // Ignore individual URL errors
       }
     }
 
     return null;
-  } catch (err) {
-    console.error('[extractEmailFromWebsite] global error', err);
+  } catch {
     return null;
   }
 }
 
+// --- SAVE EXTERNAL VENDOR ---
+
 function parseGermanAddress(address?: string | null) {
-  if (!address) {
-    return { street: null as string | null, zip: null as string | null, city: null as string | null };
-  }
+  if (!address) return { street: null, zip: null, city: null };
 
   const parts = address.split(',').map((p) => p.trim());
-
   const street = parts[0] || null;
 
   let zip: string | null = null;
@@ -349,9 +451,7 @@ export async function saveChosenExternalVendorAction(ticketId: string, vendor: E
         tgm_zip: zip,
         tgm_mail: vendor.email ?? null,
         tgm_phone: vendor.phone ?? null,
-
-        // ✅ reset propre quand on passe en externe
-        odoo_vendor_id: null,
+        odoo_vendor_id: null, // Reset when choosing external vendor
       })
       .eq('id', ticketId)
       .select('*')
@@ -369,9 +469,10 @@ export async function saveChosenExternalVendorAction(ticketId: string, vendor: E
   }
 }
 
+// --- IMPORT VENDOR TO ODOO ---
+
 export async function importChosenVendorToOdooAction(ticketId: string) {
   try {
-    // 1. Récupérer le ticket avec les infos TGM
     const { data: ticket, error } = await supabaseAdmin
       .from('tickets')
       .select('id, chosen_tgm, tgm_street, tgm_city, tgm_zip, tgm_mail, tgm_phone, asset_id, odoo_vendor_id')
@@ -387,7 +488,7 @@ export async function importChosenVendorToOdooAction(ticketId: string) {
       return { success: false, error: 'NO_VENDOR_SELECTED' };
     }
 
-    // 1bis. Si un odoo_vendor_id est présent, on vérifie qu'il existe vraiment dans Odoo
+    // Check if already exists in Odoo
     const vid = ticket.odoo_vendor_id;
     if (typeof vid === 'number' && vid > 0) {
       const exists = await partnerExistsInOdoo(vid);
@@ -396,19 +497,14 @@ export async function importChosenVendorToOdooAction(ticketId: string) {
         return { success: true, alreadyImported: true, partnerId: vid };
       }
 
-      // ID fantôme -> on clear pour forcer la recréation
-      const { error: clearErr } = await supabaseAdmin
+      // Phantom ID - clear it
+      await supabaseAdmin
         .from('tickets')
         .update({ odoo_vendor_id: null })
         .eq('id', ticketId);
-
-      if (clearErr) {
-        console.error('[importChosenVendorToOdooAction] Failed to clear phantom odoo_vendor_id', clearErr);
-        // On continue quand même : pas bloquant
-      }
     }
 
-    // 2. Créer le partenaire dans Odoo
+    // Create partner in Odoo
     const partnerId = await createServiceProviderInOdoo({
       name: ticket.chosen_tgm,
       street: ticket.tgm_street,
@@ -419,15 +515,11 @@ export async function importChosenVendorToOdooAction(ticketId: string) {
       assetId: ticket.asset_id,
     });
 
-    // 3. Sauver l'ID Odoo dans le ticket
-    const { error: updateError } = await supabaseAdmin
+    // Save Odoo ID
+    await supabaseAdmin
       .from('tickets')
       .update({ odoo_vendor_id: partnerId })
       .eq('id', ticketId);
-
-    if (updateError) {
-      console.error('[importChosenVendorToOdooAction] Error updating ticket', updateError);
-    }
 
     return { success: true, partnerId, alreadyImported: false };
   } catch (err) {
@@ -436,11 +528,13 @@ export async function importChosenVendorToOdooAction(ticketId: string) {
   }
 }
 
+// --- RESET ODOO VENDOR ID ---
+
 export async function resetOdooVendorIdAction(ticketId: string) {
   try {
     const { error } = await supabaseAdmin
       .from('tickets')
-      .update({ odoo_vendor_id: 0 }) // 👈 comme tu le veux, littéralement 0
+      .update({ odoo_vendor_id: null })
       .eq('id', ticketId);
 
     if (error) {

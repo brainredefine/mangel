@@ -1,5 +1,8 @@
+// /app/api/tickets/[id]/generate-report/route.ts
+
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "../../../../../lib/supabaseAdmin";
+import { getAdminUser } from "../../../../../lib/requireAdmin";
 
 export const runtime = "nodejs";
 
@@ -33,8 +36,25 @@ function generateRowId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// Helper pour convertir mime_type en media_type accepté par Claude
+function getMediaType(mimeType: string): "image/jpeg" | "image/png" | "image/gif" | "image/webp" | null {
+  const supported = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+  if (supported.includes(mimeType)) {
+    return mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+  }
+  // Fallback pour jpg
+  if (mimeType === "image/jpg") return "image/jpeg";
+  return null;
+}
+
 export async function POST(req: Request, context: RouteContext) {
   try {
+    // KI-Analyse kostet Geld und überschreibt Ticketdaten — nur für Admins.
+    const admin = await getAdminUser();
+    if (!admin) {
+      return NextResponse.json({ error: "Nicht autorisiert" }, { status: 401 });
+    }
+
     const { id: ticketId } = await context.params;
 
     if (!ticketId) {
@@ -55,8 +75,7 @@ export async function POST(req: Request, context: RouteContext) {
       return NextResponse.json(
         {
           error: "ANTHROPIC_MODEL manquant",
-          hint:
-            "Définis ANTHROPIC_MODEL dans ton .env (ex: claude-3-5-sonnet-latest).",
+          hint: "Définis ANTHROPIC_MODEL dans ton .env (ex: claude-sonnet-4-20250514).",
         },
         { status: 500 }
       );
@@ -85,7 +104,6 @@ export async function POST(req: Request, context: RouteContext) {
     let objektInfo = "-";
     let cleanedDescription = originalDescription;
 
-    // On cherche un bloc au début du texte du type: [📍 Objekt: ...]
     const objektRegex = /^\[📍\s*Objekt:\s*([^\]]+)\]\s*\n*/i;
     const match = originalDescription.match(objektRegex);
 
@@ -115,25 +133,49 @@ export async function POST(req: Request, context: RouteContext) {
           att.mime_type.startsWith("image/")
       ) ?? [];
 
-    // 3) Construire les blocs image pour Claude (URLs publiques Supabase)
+    // 3) Télécharger les images et les convertir en base64
     const imageBlocks: any[] = [];
 
     for (const att of imageAttachments) {
-      const { data } = supabaseAdmin.storage
-        .from("ticket_attachments")
-        .getPublicUrl(att.file_path);
+      try {
+        // Télécharger l'image depuis Supabase Storage
+        const { data: fileData, error: downloadError } = await supabaseAdmin
+          .storage
+          .from("ticket_attachments")
+          .download(att.file_path);
 
-      const publicUrl = data?.publicUrl;
-      if (!publicUrl) continue;
+        if (downloadError || !fileData) {
+          console.error("Download error for", att.file_path, downloadError);
+          continue;
+        }
 
-      imageBlocks.push({
-        type: "image",
-        source: {
-          type: "url",
-          url: publicUrl,
-        },
-      });
+        // Convertir en base64
+        const arrayBuffer = await fileData.arrayBuffer();
+        const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+        // Vérifier le media_type
+        const mediaType = getMediaType(att.mime_type || "image/jpeg");
+        if (!mediaType) {
+          console.log("Unsupported media type:", att.mime_type);
+          continue;
+        }
+
+        imageBlocks.push({
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: mediaType,
+            data: base64,
+          },
+        });
+
+        console.log(`✅ Image loaded: ${att.file_path} (${mediaType})`);
+      } catch (imgErr) {
+        console.error("Error processing image:", att.file_path, imgErr);
+      }
     }
+
+    console.log(`📷 Total images loaded: ${imageBlocks.length}`);
 
     // 4) Construire le prompt (JSON ONLY)
     const categories =
@@ -156,12 +198,12 @@ Ticketdaten (nur als Kontext, wenn sinnvoll im Text verwenden):
 - Dringlichkeit: ${ticket.priority || "-"}
 
 AUFGABE:
-Analysiere die textliche Beschreibung und – falls vorhanden – die Bilder (Gebäudeschäden, technische Mängel, etc.).
+Analysiere die textliche Beschreibung und — falls vorhanden — die Bilder (Gebäudeschäden, technische Mängel, etc.).
 
 Erstelle daraus eine Kostenanalyse in folgendem JSON-Format:
 
 {
-  "cost_analysis_text": "<ca. 300–500 Wörter Fließtext auf Deutsch, der den Mangel, die Ursachen, den empfohlenen Lösungsweg und besondere Risiken zusammenfasst – in der unten beschriebenen Struktur>",
+  "cost_analysis_text": "<ca. 300–500 Wörter Fließtext auf Deutsch, der den Mangel, die Ursachen, den empfohlenen Lösungsweg und besondere Risiken zusammenfasst — in der unten beschriebenen Struktur>",
   "cost_table": [
     {
       "id": "1763406379002-q4e5b3",
@@ -219,7 +261,7 @@ DEFINITIONEN FÜR "cost_table":
 - "rowType": einer der Werte "subtotal" oder "extra".
 - "kostengruppe": passende Kostengruppe nach DIN 276, z.B. "KG 330", "KG 340", "KG 360", "KG 410", "KG 440", "KG 700" etc. Du darfst auch spezifischere Untergruppen wie "KG 329", "KG 361", "KG 364" verwenden, wenn sie besser passen.
 
-Zuordnung nach DIN 276 – immer die präziseste passende Kostengruppe wählen:
+Zuordnung nach DIN 276 — immer die präziseste passende Kostengruppe wählen:
 - KG 320: Erdberührende Bauteile, Fundamentabdichtung, Abdichtung im Erdreich
 - KG 330: Außenwände, Fassaden, Fenster, Türen, Putzarbeiten außen, Abdichtung außen, Sockelsanierung
 - KG 340: Innenwände, Innenputz, Innenanstrich, Schimmel innen, Innentüren
@@ -246,80 +288,94 @@ WICHTIG:
       ...imageBlocks,
     ];
 
-    // 5) Appel à Claude (Anthropic Messages API)
-    const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY!,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 50000,
-        temperature: 0.2,
-        messages: [
-          {
-            role: "user",
-            content: messageContent,
+    // 5) Appel à Claude via TOOL USE (structured output). Die API liefert das
+    //    Ergebnis direkt als JSON-Objekt (block.input) — kein JSON.parse mehr und
+    //    damit keine Fehler durch nicht-escapte Anführungszeichen im deutschen Text.
+    const ANALYSIS_TOOL = {
+      name: "submit_kostenanalyse",
+      description: "Übermittelt die strukturierte Mangel- und Kostenanalyse.",
+      input_schema: {
+        type: "object",
+        properties: {
+          cost_analysis_text: {
+            type: "string",
+            description:
+              "Strukturierter Fließtext auf Deutsch (Fotobeschreibung, Mangelbeschreibung, Leistungspositionen mit DIN-276-Kostengruppen).",
           },
-        ],
-      }),
-    });
+          cost_table: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                label: { type: "string" },
+                notes: { type: "string" },
+                amount: { type: "number" },
+                rowType: { type: "string", enum: ["position", "subtotal", "extra", "total"] },
+                kostengruppe: { type: "string" },
+              },
+              required: ["label", "amount", "kostengruppe"],
+            },
+          },
+        },
+        required: ["cost_analysis_text", "cost_table"],
+      },
+    };
 
-    if (!anthropicRes.ok) {
-      const errText = await anthropicRes.text();
-      console.error("Anthropic error:", errText);
-      return NextResponse.json(
-        { error: "Erreur Claude", details: errText },
-        { status: 500 }
-      );
-    }
+    const callClaude = async (): Promise<{ parsed: any | null; stopReason: string | null }> => {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": process.env.ANTHROPIC_API_KEY!,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          max_tokens: 16000,
+          temperature: 0.2,
+          tools: [ANALYSIS_TOOL],
+          tool_choice: { type: "tool", name: "submit_kostenanalyse" },
+          messages: [{ role: "user", content: messageContent }],
+        }),
+      });
 
-    const anthropicJson: any = await anthropicRes.json();
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error("Anthropic error:", errText);
+        return { parsed: null, stopReason: "http_error" };
+      }
 
-    // Claude renvoie un tableau "content" avec des blocs { type: "text", text: "..." }
-    let outputText = "";
-    if (Array.isArray(anthropicJson.content)) {
-      for (const block of anthropicJson.content) {
-        if (block.type === "text" && typeof block.text === "string") {
-          outputText += block.text;
+      const json: any = await res.json();
+      const stopReason: string | null = json?.stop_reason ?? null;
+
+      let toolInput: any = null;
+      if (Array.isArray(json.content)) {
+        for (const block of json.content) {
+          if (block.type === "tool_use" && block.input) {
+            toolInput = block.input;
+            break;
+          }
         }
       }
+      return { parsed: toolInput ?? null, stopReason };
+    };
+
+    let result = await callClaude();
+    if (!result.parsed) {
+      console.warn("⚠️ Kein Tool-Output — Retry. stop_reason:", result.stopReason);
+      result = await callClaude();
     }
 
-    outputText = outputText.trim();
-    if (!outputText) {
+    if (!result.parsed) {
+      console.error("❌ KI-Analyse: kein gültiger Tool-Output nach Retry.");
       return NextResponse.json(
-        { error: "Aucune sortie texte reçue du modèle" },
+        { error: "KI-Analyse fehlgeschlagen. Bitte erneut versuchen." },
         { status: 500 }
       );
     }
 
-    // Petite normalisation au cas où le modèle renvoie ```json ... ```
-    if (outputText.startsWith("```")) {
-      // enlève les fences markdown type ```json ... ```
-      outputText = outputText
-        .replace(/^```json\s*/i, "")  // en-tête ```json
-        .replace(/^```\s*/i, "")      // ou juste ``` au début
-        .replace(/```$/, "")          // fence de fin
-        .trim();
-    }
-
-    // 6) Parser le JSON
-    let parsed: any;
-    try {
-      parsed = JSON.parse(outputText);
-    } catch (e) {
-      console.error("❌ JSON parse error sur la réponse du modèle:", outputText);
-      return NextResponse.json(
-        {
-          error: "Réponse du modèle non valide (JSON invalide)",
-          raw: outputText,
-        },
-        { status: 500 }
-      );
-    }
+    const parsed: any = result.parsed;
 
     // 7) Validation minimale / normalisation
     const cost_analysis_text: string =
@@ -331,7 +387,7 @@ WICHTIG:
       ? parsed.cost_table
       : [];
 
-    // S'assurer que chaque ligne a un id (au cas où le modèle oublierait)
+    // S'assurer que chaque ligne a un id
     cost_table = cost_table.map((row) => ({
       id: row.id && typeof row.id === "string" ? row.id : generateRowId(),
       label: row.label ?? "",
@@ -342,13 +398,12 @@ WICHTIG:
     }));
 
     // 8) Update du ticket dans Supabase
-    // -> on nettoie aussi la description en BDD (prefixe [📍 Objekt: ...] supprimé)
     const { error: updateError } = await supabaseAdmin
       .from("tickets")
       .update({
         description: cleanedDescription,
         cost_analysis_text,
-        cost_table, // colonne JSONB
+        cost_table,
       })
       .eq("id", ticketId);
 
@@ -368,7 +423,7 @@ WICHTIG:
       cost_table,
     });
   } catch (err: any) {
-    console.error("❌ generate-report JSON error:", err);
+    console.error("❌ generate-report error:", err);
     return NextResponse.json(
       { error: "Erreur interne", details: err?.message },
       { status: 500 }

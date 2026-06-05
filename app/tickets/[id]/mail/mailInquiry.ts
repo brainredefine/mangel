@@ -44,8 +44,7 @@ export function buildInquiryMail(params: {
           .map((row, index) => {
             const lpNumber = index + 1;
             const label = row.label || 'Leistungsposition';
-            const kg = row.kostengruppe || '';
-            return `- LP ${lpNumber}: ${label}${kg ? ` (KG ${kg})` : ''}`;
+            return `- LP ${lpNumber}: ${label}`;
           })
           .join('\n')
       : '- (keine Leistungspositionen vorhanden)';
